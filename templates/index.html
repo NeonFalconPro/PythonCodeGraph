@@ -28,6 +28,16 @@
                 <button id="analyzeBtn" class="btn btn-primary">🚀 开始解析</button>
             </div>
 
+            <!-- 搜索 -->
+            <div class="control-group">
+                <label>🔍 搜索节点</label>
+                <div class="search-input-group">
+                    <input type="text" id="searchInput" placeholder="输入节点名称搜索..."
+                           class="input-field">
+                    <span id="searchCount" class="search-count"></span>
+                </div>
+            </div>
+
             <!-- 过滤器 -->
             <div class="control-group">
                 <label>节点类型过滤</label>
@@ -49,6 +59,9 @@
                     </label>
                     <label class="checkbox-item">
                         <input type="checkbox" value="variable" class="node-filter"> 📌 变量
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="external" checked class="node-filter"> 🔗 外部库
                     </label>
                 </div>
             </div>
@@ -144,6 +157,7 @@
                                 <div class="legend-item"><span class="dot" style="background:#96CEB4"></span> 函数 (Function)</div>
                                 <div class="legend-item"><span class="dot" style="background:#FFEAA7"></span> 方法 (Method)</div>
                                 <div class="legend-item"><span class="dot" style="background:#DDA0DD"></span> 变量 (Variable)</div>
+                                <div class="legend-item"><span class="dot" style="background:#FF9F43"></span> 外部库 (External)</div>
                             </div>
                             <div class="legend-section">
                                 <h4>关系类型</h4>

@@ -11,6 +11,7 @@ let allNodes = [];          // 所有节点原始数据
 let allEdges = [];          // 所有边原始数据
 let currentMetadata = null; // 当前项目元数据
 let browsePath = '';        // 当前浏览路径
+let browseParent = '';      // 上级目录路径（来自API）
 let highlightedNodeId = null; // 当前高亮的节点
 
 // ============ DOM 元素 ============
@@ -36,6 +37,8 @@ const parentDirBtn = document.getElementById('parentDirBtn');
 const currentPathSpan = document.getElementById('currentPath');
 const dirList = document.getElementById('dirList');
 const selectDirBtn = document.getElementById('selectDirBtn');
+const searchInput = document.getElementById('searchInput');
+const searchCount = document.getElementById('searchCount');
 
 // ============ 事件监听 ============
 analyzeBtn.addEventListener('click', handleAnalyze);
@@ -51,6 +54,7 @@ closeBrowse.addEventListener('click', () => browseModal.style.display = 'none');
 cancelBrowse.addEventListener('click', () => browseModal.style.display = 'none');
 parentDirBtn.addEventListener('click', handleParentDir);
 selectDirBtn.addEventListener('click', handleSelectDir);
+searchInput.addEventListener('input', handleSearch);
 
 // 过滤器变化时重新渲染
 document.querySelectorAll('.node-filter, .edge-filter').forEach(cb => {
@@ -136,6 +140,19 @@ function renderGraph(nodes, edges) {
     network = new vis.Network(graphContainer, data, options);
     highlightedNodeId = null;
 
+    // 绘制外部库分组背景
+    network.on('beforeDrawing', function(ctx) {
+        drawExternalPackageHulls(ctx);
+    });
+
+    // 安全超时：防止大图稳定化时间过长
+    const stabilizationTimeout = setTimeout(() => {
+        if (network) {
+            network.stopSimulation();
+            network.fit({ animation: true });
+        }
+    }, 15000);
+
     // 点击节点：显示详情 + 高亮关联
     network.on('click', (params) => {
         if (params.nodes.length > 0) {
@@ -161,6 +178,7 @@ function renderGraph(nodes, edges) {
 
     // 稳定后自适应
     network.once('stabilizationIterationsDone', () => {
+        clearTimeout(stabilizationTimeout);
         network.fit({ animation: true });
     });
 }
@@ -310,6 +328,9 @@ function focusAndHighlightNode(nodeId) {
  */
 function getGraphOptions() {
     const layout = layoutSelect.value;
+    const nodeCount = allNodes.length;
+    // 根据节点数量动态调整稳定化参数
+    const stabIterations = nodeCount > 200 ? Math.max(50, Math.floor(40000 / nodeCount)) : 200;
     const options = {
         nodes: {
             font: {
@@ -361,7 +382,7 @@ function getGraphOptions() {
                 damping: 0.4,
             },
             stabilization: {
-                iterations: 200,
+                iterations: stabIterations,
                 updateInterval: 25,
             },
         },
@@ -442,6 +463,7 @@ function showNodeDetail(nodeId) {
     const typeNames = {
         package: '📦 包', module: '📄 模块', class: '🏷️ 类',
         function: '⚡ 函数', method: '🔧 方法', variable: '📌 变量',
+        external: '🔗 外部库',
     };
     html += `<div class="detail-row">
         <div class="detail-label">类型</div>
@@ -523,6 +545,7 @@ function showStats(metadata) {
         const typeLabels = {
             package: '📦 包', module: '📄 模块', class: '🏷️ 类',
             function: '⚡ 函数', method: '🔧 方法', variable: '📌 变量',
+            external: '🔗 外部库',
         };
         for (const [type, count] of Object.entries(metadata.node_type_counts)) {
             html += `<div class="stat-row"><span>${typeLabels[type] || type}</span><span class="stat-value">${count}</span></div>`;
@@ -565,6 +588,7 @@ async function loadDirectory(path) {
         const data = await response.json();
 
         browsePath = data.current || '';
+        browseParent = data.parent || '';
         currentPathSpan.textContent = browsePath || '根目录';
 
         dirList.innerHTML = '';
@@ -593,10 +617,8 @@ async function loadDirectory(path) {
 }
 
 function handleParentDir() {
-    if (browsePath) {
-        const parent = browsePath.replace(/\\[^\\]*$/, '').replace(/\/[^\/]*$/, '');
-        loadDirectory(parent || '');
-    }
+    // 使用 API 返回的 parent 路径，确保可以正确返回上级和驱动器列表
+    loadDirectory(browseParent);
 }
 
 function handleSelectDir() {
@@ -621,4 +643,171 @@ function showToast(message, type = 'info') {
         toast.style.transition = 'opacity 0.3s';
         setTimeout(() => toast.remove(), 300);
     }, 3000);
+}
+
+// ============ 外部库分组背景绘制 ============
+
+/**
+ * 在 canvas 上绘制外部库分组的背景区域
+ */
+function drawExternalPackageHulls(ctx) {
+    if (!network || !nodesDataSet) return;
+
+    // 按 externalPackage 分组
+    const groups = {};
+    const allN = nodesDataSet.get();
+    allN.forEach(node => {
+        if (node.group === 'external' && node.externalPackage) {
+            if (!groups[node.externalPackage]) groups[node.externalPackage] = [];
+            groups[node.externalPackage].push(node.id);
+        }
+    });
+
+    const positions = network.getPositions();
+    const hullColors = [
+        { fill: 'rgba(255, 159, 67, 0.07)', stroke: 'rgba(255, 159, 67, 0.30)', text: 'rgba(255, 159, 67, 0.55)' },
+        { fill: 'rgba(46, 213, 115, 0.07)', stroke: 'rgba(46, 213, 115, 0.30)', text: 'rgba(46, 213, 115, 0.55)' },
+        { fill: 'rgba(116, 185, 255, 0.07)', stroke: 'rgba(116, 185, 255, 0.30)', text: 'rgba(116, 185, 255, 0.55)' },
+        { fill: 'rgba(162, 155, 254, 0.07)', stroke: 'rgba(162, 155, 254, 0.30)', text: 'rgba(162, 155, 254, 0.55)' },
+        { fill: 'rgba(255, 107, 129, 0.07)', stroke: 'rgba(255, 107, 129, 0.30)', text: 'rgba(255, 107, 129, 0.55)' },
+    ];
+
+    let colorIdx = 0;
+    Object.entries(groups).forEach(([pkg, nodeIds]) => {
+        const points = nodeIds.map(id => positions[id]).filter(Boolean);
+        if (points.length === 0) return;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        points.forEach(p => {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+        });
+
+        const style = hullColors[colorIdx % hullColors.length];
+        colorIdx++;
+
+        const padding = 45;
+        const x = minX - padding;
+        const y = minY - padding - 18;
+        const w = Math.max(maxX - minX + padding * 2, 100);
+        const h = Math.max(maxY - minY + padding * 2 + 18, 60);
+        const r = 12;
+
+        ctx.save();
+        ctx.fillStyle = style.fill;
+        ctx.strokeStyle = style.stroke;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+
+        // 圆角矩形
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // 标签
+        ctx.setLineDash([]);
+        ctx.fillStyle = style.text;
+        ctx.font = 'bold 13px Segoe UI, Microsoft YaHei, sans-serif';
+        ctx.fillText(`📦 ${pkg}`, x + 10, y + 15);
+        ctx.restore();
+    });
+}
+
+// ============ 搜索功能 ============
+
+/**
+ * 搜索节点并高亮显示
+ */
+function handleSearch() {
+    const query = searchInput.value.trim().toLowerCase();
+
+    if (!query || !nodesDataSet) {
+        searchCount.textContent = '';
+        clearHighlight();
+        return;
+    }
+
+    const allN = nodesDataSet.get();
+    const matchIds = new Set();
+
+    allN.forEach(node => {
+        const label = (node.label || '').toLowerCase();
+        const id = (node.id || '').toLowerCase();
+        if (label.includes(query) || id.includes(query)) {
+            matchIds.add(node.id);
+        }
+    });
+
+    searchCount.textContent = matchIds.size > 0 ? `找到 ${matchIds.size} 个` : '无匹配';
+
+    if (matchIds.size === 0) {
+        clearHighlight();
+        return;
+    }
+
+    // 高亮匹配节点
+    const updatedNodes = allN.map(node => {
+        if (matchIds.has(node.id)) {
+            return {
+                id: node.id,
+                color: { background: '#FFD700', border: '#FFA500' },
+                opacity: 1,
+                borderWidth: 4,
+                font: { color: '#ffffff', size: 15, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+                shadow: { enabled: true, color: 'rgba(255, 215, 0, 0.6)', size: 15 },
+            };
+        } else {
+            return {
+                id: node.id,
+                color: { background: '#3a3b5c', border: '#2d2e52' },
+                opacity: 0.15,
+                borderWidth: 1,
+                font: { color: 'rgba(160,160,192,0.25)', size: 9, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    const allE = edgesDataSet.get();
+    const updatedEdges = allE.map(edge => {
+        if (matchIds.has(edge.from) || matchIds.has(edge.to)) {
+            return {
+                id: edge.id,
+                color: edge._originalColor,
+                width: edge._originalWidth || 1,
+                font: { size: 9, color: '#808090', strokeWidth: 0, align: 'middle' },
+                shadow: { enabled: false },
+            };
+        } else {
+            return {
+                id: edge.id,
+                color: { color: 'rgba(50,50,70,0.08)', highlight: 'rgba(50,50,70,0.08)', opacity: 0.05 },
+                width: 0.3,
+                font: { size: 0 },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    nodesDataSet.update(updatedNodes);
+    edgesDataSet.update(updatedEdges);
+
+    highlightedNodeId = 'search';
+
+    // 如果匹配数量较少，自动聚焦
+    if (matchIds.size > 0 && matchIds.size <= 20) {
+        network.fit({ nodes: Array.from(matchIds), animation: true });
+    }
 }

@@ -20,6 +20,9 @@ class PythonASTParser:
         self.nodes: Dict[str, NodeData] = {}
         self.edges: List[EdgeData] = []
         self._module_map: Dict[str, str] = {}  # 模块名 -> 节点ID 的映射
+        self._edge_keys: set = set()  # (source, target, edge_type) 快速去重
+        self._class_name_index: Dict[str, str] = {}  # 类名 -> 节点ID 索引
+        self._func_name_index: Dict[str, str] = {}   # 函数名 -> 节点ID 索引
 
     def parse_project(self):
         """解析整个项目"""
@@ -45,7 +48,9 @@ class PythonASTParser:
                 if not d.startswith('.')
                 and d not in ('__pycache__', 'node_modules', '.git', 'venv', 'env',
                               '.venv', '.env', '.tox', '.mypy_cache', '.pytest_cache',
-                              'dist', 'build', 'egg-info')
+                              'dist', 'build', 'egg-info', 'site-packages',
+                              '__pypackages__', '.eggs', 'htmlcov', '.nox')
+                and not d.endswith('.egg-info')
             ]
             for f in files:
                 if f.endswith('.py'):
@@ -73,6 +78,12 @@ class PythonASTParser:
 
     def _parse_file(self, file_path: Path):
         """解析单个 Python 文件"""
+        try:
+            if file_path.stat().st_size > 1024 * 1024:  # 跳过超过 1MB 的文件
+                return
+        except OSError:
+            return
+
         try:
             source = file_path.read_text(encoding='utf-8')
         except (UnicodeDecodeError, PermissionError):
@@ -227,7 +238,7 @@ class PythonASTParser:
 
         self._add_node(NodeData(
             id=method_id,
-            label=f"{class_name}.{node.name}",
+            label=node.name,
             node_type=NodeType.METHOD,
             file_path=file_path,
             line_number=node.lineno,
@@ -287,6 +298,9 @@ class PythonASTParser:
                         edge_type=EdgeType.IMPORTS,
                         label="导入",
                     ))
+                else:
+                    # 外部库导入
+                    self._add_external_import_chain(module_id, alias.name, [])
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 # 处理相对导入
@@ -306,23 +320,80 @@ class PythonASTParser:
                         label="导入",
                     ))
 
-                # 解析 from xxx import yyy 中的具体导入项
-                if node.names:
-                    for alias in node.names:
-                        if alias.name == '*':
-                            continue
-                        # 尝试解析为类、函数等
-                        item_id = (
-                            self._resolve_class_id(alias.name, import_module) or
-                            self._resolve_function_id(alias.name, import_module)
-                        )
-                        if item_id and item_id in self.nodes:
-                            self._add_edge(EdgeData(
-                                source=module_id,
-                                target=item_id,
-                                edge_type=EdgeType.IMPORTS,
-                                label=f"导入 {alias.name}",
-                            ))
+                    # 解析 from xxx import yyy 中的具体导入项
+                    if node.names:
+                        for alias in node.names:
+                            if alias.name == '*':
+                                continue
+                            item_id = (
+                                self._resolve_class_id(alias.name, import_module) or
+                                self._resolve_function_id(alias.name, import_module)
+                            )
+                            if item_id and item_id in self.nodes:
+                                self._add_edge(EdgeData(
+                                    source=module_id,
+                                    target=item_id,
+                                    edge_type=EdgeType.IMPORTS,
+                                    label=f"导入 {alias.name}",
+                                ))
+                elif node.level == 0:
+                    # 外部库导入
+                    names = [alias.name for alias in node.names if alias.name != '*']
+                    self._add_external_import_chain(module_id, import_module, names)
+
+    def _add_external_import_chain(self, module_id: str, import_module: str, imported_names: List[str]):
+        """创建外部库导入链节点"""
+        parts = import_module.split('.')
+        root_pkg = parts[0]
+        prev_id = None
+
+        for i, part in enumerate(parts):
+            full_path = '.'.join(parts[:i + 1])
+            ext_id = f"external:{full_path}"
+            self._add_node(NodeData(
+                id=ext_id,
+                label=part,
+                node_type=NodeType.EXTERNAL,
+                details={"external_package": root_pkg},
+            ))
+            if prev_id:
+                self._add_edge(EdgeData(
+                    source=prev_id,
+                    target=ext_id,
+                    edge_type=EdgeType.CONTAINS,
+                    label="包含",
+                ))
+            prev_id = ext_id
+
+        leaf_id = f"external:{import_module}"
+        if imported_names:
+            for name in imported_names:
+                item_id = f"external:{import_module}.{name}"
+                self._add_node(NodeData(
+                    id=item_id,
+                    label=name,
+                    node_type=NodeType.EXTERNAL,
+                    details={"external_package": root_pkg},
+                ))
+                self._add_edge(EdgeData(
+                    source=leaf_id,
+                    target=item_id,
+                    edge_type=EdgeType.CONTAINS,
+                    label="包含",
+                ))
+                self._add_edge(EdgeData(
+                    source=module_id,
+                    target=item_id,
+                    edge_type=EdgeType.IMPORTS,
+                    label="导入",
+                ))
+        else:
+            self._add_edge(EdgeData(
+                source=module_id,
+                target=leaf_id,
+                edge_type=EdgeType.IMPORTS,
+                label="导入",
+            ))
 
     def _parse_assignment(self, node: ast.Assign, module_id: str,
                           module_name: str, file_path: str):
@@ -385,14 +456,19 @@ class PythonASTParser:
         """添加节点（去重）"""
         if node.id not in self.nodes:
             self.nodes[node.id] = node
+            # 构建名称索引以加速后续解析
+            short_name = node.id.split(":", 1)[-1].rsplit(".", 1)[-1]
+            if node.id.startswith("class:"):
+                self._class_name_index[short_name] = node.id
+            elif node.id.startswith("function:"):
+                self._func_name_index[short_name] = node.id
 
     def _add_edge(self, edge: EdgeData):
         """添加边（去重）"""
-        for existing in self.edges:
-            if (existing.source == edge.source and
-                existing.target == edge.target and
-                existing.edge_type == edge.edge_type):
-                return
+        key = (edge.source, edge.target, edge.edge_type)
+        if key in self._edge_keys:
+            return
+        self._edge_keys.add(key)
         self.edges.append(edge)
 
     def _resolve_module_id(self, module_name: str) -> Optional[str]:
@@ -407,25 +483,17 @@ class PythonASTParser:
 
     def _resolve_class_id(self, class_name: str, context_module: str) -> Optional[str]:
         """解析类名到节点ID"""
-        # 直接在当前模块中查找
         full_id = f"class:{context_module}.{class_name}"
         if full_id in self.nodes:
             return full_id
-        # 在所有模块中查找
-        for node_id in self.nodes:
-            if node_id.startswith("class:") and node_id.endswith(f".{class_name}"):
-                return node_id
-        return None
+        return self._class_name_index.get(class_name)
 
     def _resolve_function_id(self, func_name: str, context_module: str) -> Optional[str]:
         """解析函数名到节点ID"""
         full_id = f"function:{context_module}.{func_name}"
         if full_id in self.nodes:
             return full_id
-        for node_id in self.nodes:
-            if node_id.startswith("function:") and node_id.endswith(f".{func_name}"):
-                return node_id
-        return None
+        return self._func_name_index.get(func_name)
 
     @staticmethod
     def _get_name(node) -> Optional[str]:

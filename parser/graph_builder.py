@@ -46,7 +46,7 @@ class GraphBuilder:
         ]
 
         # 收集项目元数据
-        py_file_count = sum(1 for _ in self.project_path.rglob('*.py'))
+        py_file_count = sum(1 for n in filtered_nodes if n.node_type.value == 'module')
         metadata = {
             "project_name": self.project_path.name,
             "project_path": str(self.project_path),

@@ -142,7 +142,7 @@ async def browse_directory(path: str = ""):
                 drive = f"{letter}:\\"
                 if os.path.exists(drive):
                     drives.append({"name": drive, "path": drive, "is_dir": True})
-            return JSONResponse(content={"items": drives, "current": ""})
+            return JSONResponse(content={"items": drives, "current": "", "parent": ""})
         else:
             path = "/"
 

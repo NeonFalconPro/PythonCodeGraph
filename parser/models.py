@@ -15,6 +15,7 @@ class NodeType(str, Enum):
     METHOD = "method"           # 方法（类中的函数）
     VARIABLE = "variable"       # 模块级变量/常量
     PACKAGE = "package"         # 包（文件夹）
+    EXTERNAL = "external"       # 外部库（第三方/标准库）
 
 
 class EdgeType(str, Enum):
@@ -63,6 +64,7 @@ class GraphData(BaseModel):
             NodeType.FUNCTION: {"color": "#96CEB4", "shape": "triangle", "size": 15},
             NodeType.METHOD: {"color": "#FFEAA7", "shape": "triangle", "size": 12},
             NodeType.VARIABLE: {"color": "#DDA0DD", "shape": "square", "size": 10},
+            NodeType.EXTERNAL: {"color": "#FF9F43", "shape": "dot", "size": 12},
         }
 
         # 边类型对应的颜色和样式
@@ -83,6 +85,7 @@ class GraphData(BaseModel):
             NodeType.FUNCTION: "\u26A1",      # ⚡
             NodeType.METHOD: "\U0001F527",    # 🔧
             NodeType.VARIABLE: "\U0001F4CC",  # 📌
+            NodeType.EXTERNAL: "\U0001F517",  # 🔗
         }
 
         vis_nodes = []
@@ -98,6 +101,8 @@ class GraphData(BaseModel):
                 "title": self._build_tooltip(node),
                 "group": node.node_type.value,
             }
+            if node.node_type == NodeType.EXTERNAL and node.details:
+                vis_node["externalPackage"] = node.details.get("external_package", "")
             vis_nodes.append(vis_node)
 
         vis_edges = []
@@ -123,6 +128,7 @@ class GraphData(BaseModel):
         type_labels = {
             "package": "📦 包", "module": "📄 模块", "class": "🏷️ 类",
             "function": "⚡ 函数", "method": "🔧 方法", "variable": "📌 变量",
+            "external": "🔗 外部库",
         }
         parts = [
             f"【{node.label}】",

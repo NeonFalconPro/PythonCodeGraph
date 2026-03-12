@@ -185,6 +185,28 @@ select.input-field {
     border-radius: 2px;
 }
 
+/* ========== 搜索框 ========== */
+.search-input-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.search-input-group .input-field {
+    flex: 1;
+    padding-right: 60px;
+}
+
+.search-count {
+    position: absolute;
+    right: 10px;
+    font-size: 0.75rem;
+    color: var(--accent);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 /* ========== 统计面板 ========== */
 .stats-content {
     background: var(--bg-tertiary);

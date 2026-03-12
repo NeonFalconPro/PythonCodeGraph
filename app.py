@@ -45,37 +45,57 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest):
-    """解析指定文件夹，返回图谱数据"""
-    target_path = req.path.strip()
-
+def _build_graph(path: str):
+    """解析项目代码，返回图谱数据（标准模式和蓝图模式共用）"""
+    target_path = path.strip()
     if not target_path:
         raise HTTPException(status_code=400, detail="请提供文件夹路径")
-
     target = Path(target_path)
     if not target.exists():
         raise HTTPException(status_code=400, detail=f"路径不存在: {target_path}")
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"不是文件夹: {target_path}")
+    builder = GraphBuilder(target_path)
+    return builder.build()
 
+
+@app.post("/api/analyze")
+async def analyze(req: AnalyzeRequest):
+    """标准模式：返回 vis-network 格式数据"""
     try:
-        builder = GraphBuilder(target_path)
-        graph_data = builder.build()
+        graph_data = _build_graph(req.path)
         vis_data = graph_data.to_vis_format()
-
         return JSONResponse(content={
             "success": True,
             "data": vis_data,
             "metadata": graph_data.metadata,
         })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解析出错: {str(e)}")
+
+
+@app.post("/api/analyze/blueprint")
+async def analyze_blueprint(req: AnalyzeRequest):
+    """蓝图模式：返回 LiteGraph.js 格式数据"""
+    try:
+        graph_data = _build_graph(req.path)
+        blueprint_data = graph_data.to_blueprint_format()
+        return JSONResponse(content={
+            "success": True,
+            "data": blueprint_data,
+            "metadata": graph_data.metadata,
+        })
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析出错: {str(e)}")
 
 
 @app.post("/api/analyze/filtered")
 async def analyze_filtered(req: FilterRequest):
-    """带过滤条件的解析"""
+    """带过滤条件的解析（标准模式）"""
     target_path = req.path.strip()
 
     if not target_path:

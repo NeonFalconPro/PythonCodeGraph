@@ -633,3 +633,13 @@ select.input-field {
     from { transform: translateY(20px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
 }
+
+/* ========== LiteGraph 蓝图模式覆盖 ========== */
+#lgCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+.lgraphcanvas {
+    background: var(--bg-primary) !important;
+}

@@ -124,6 +124,164 @@ class GraphData(BaseModel):
 
         return {"nodes": vis_nodes, "edges": vis_edges}
 
+    def to_blueprint_format(self) -> dict:
+        """转换为 UE5 蓝图风格的格式
+
+        每个模块文件成为一个蓝图卡片节点，内含引脚（类、函数、方法、变量）。
+        边连接在引脚之间。外部库节点保留为独立节点。
+        """
+        # 引脚类型对应的颜色
+        pin_colors = {
+            NodeType.CLASS: "#45B7D1",
+            NodeType.FUNCTION: "#96CEB4",
+            NodeType.METHOD: "#FFEAA7",
+            NodeType.VARIABLE: "#DDA0DD",
+        }
+
+        # 收集所有 CONTAINS 边，建立 parent->children 映射
+        contains_children: Dict[str, list] = {}
+        contains_edges_set = set()
+        for edge in self.edges:
+            if edge.edge_type == EdgeType.CONTAINS:
+                contains_children.setdefault(edge.source, []).append(edge.target)
+                contains_edges_set.add((edge.source, edge.target))
+
+        # 建立 node_id -> NodeData 映射
+        node_map: Dict[str, NodeData] = {n.id: n for n in self.nodes}
+
+        # 找出所有模块节点, 构建蓝图卡片
+        blueprint_nodes = []
+        absorbed_ids = set()  # 被吸收进蓝图卡片的子节点 ID
+
+        for node in self.nodes:
+            if node.node_type == NodeType.MODULE:
+                children_ids = contains_children.get(node.id, [])
+                pins = []
+                for cid in children_ids:
+                    child = node_map.get(cid)
+                    if child and child.node_type in pin_colors:
+                        pins.append({
+                            "id": child.id,
+                            "label": child.label,
+                            "type": child.node_type.value,
+                            "color": pin_colors[child.node_type],
+                            "tooltip": self._build_tooltip(child),
+                        })
+                        absorbed_ids.add(cid)
+                        # 方法属于类，类已被吸收，方法也要收集
+                        method_ids = contains_children.get(cid, [])
+                        for mid in method_ids:
+                            mchild = node_map.get(mid)
+                            if mchild and mchild.node_type in pin_colors:
+                                pins.append({
+                                    "id": mchild.id,
+                                    "label": mchild.label,
+                                    "type": mchild.node_type.value,
+                                    "color": pin_colors[mchild.node_type],
+                                    "parentClass": child.label,
+                                    "tooltip": self._build_tooltip(mchild),
+                                })
+                                absorbed_ids.add(mid)
+
+                blueprint_nodes.append({
+                    "id": node.id,
+                    "label": node.label,
+                    "nodeType": "blueprint",
+                    "color": "#4ECDC4",
+                    "title": self._build_tooltip(node),
+                    "filePath": node.file_path or "",
+                    "pins": pins,
+                })
+
+        # 非模块、非被吸收的节点保留为普通节点（外部库、包等）
+        type_styles = {
+            NodeType.PACKAGE: {"color": "#FF6B6B", "shape": "diamond", "size": 30},
+            NodeType.EXTERNAL: {"color": "#FF9F43", "shape": "dot", "size": 12},
+        }
+        type_icons = {
+            NodeType.PACKAGE: "\U0001F4E6",
+            NodeType.EXTERNAL: "\U0001F517",
+        }
+
+        plain_nodes = []
+        for node in self.nodes:
+            if node.id in absorbed_ids:
+                continue
+            if node.node_type == NodeType.MODULE:
+                continue
+            style = type_styles.get(node.node_type, {"color": "#999", "shape": "dot", "size": 15})
+            icon = type_icons.get(node.node_type, "")
+            plain_node = {
+                "id": node.id,
+                "label": f"{icon} {node.label}",
+                "nodeType": "plain",
+                "color": style["color"],
+                "shape": style["shape"],
+                "size": style["size"],
+                "title": self._build_tooltip(node),
+                "group": node.node_type.value,
+            }
+            if node.node_type == NodeType.EXTERNAL and node.details:
+                plain_node["externalPackage"] = node.details.get("external_package", "")
+            plain_nodes.append(plain_node)
+
+        # 边：跳过已内聚到蓝图卡片中的 CONTAINS 边，保留外部库层级的 CONTAINS 边
+        edge_styles = {
+            EdgeType.IMPORTS: {"color": "#E74C3C", "width": 2},
+            EdgeType.INHERITS: {"color": "#3498DB", "width": 3},
+            EdgeType.CONTAINS: {"color": "#95A5A6", "width": 1},
+            EdgeType.CALLS: {"color": "#2ECC71", "width": 1},
+            EdgeType.DECORATES: {"color": "#9B59B6", "width": 2},
+            EdgeType.INSTANTIATES: {"color": "#F39C12", "width": 1},
+            EdgeType.USES: {"color": "#00CEC9", "width": 1.5},
+        }
+
+        # 构建 slot 索引映射（用于 LiteGraph.js 精准连线）
+        # 蓝图节点: slot 0 = 模块本身, slot 1..N = 引脚
+        slot_map: Dict[str, tuple] = {}
+        for bp_node in blueprint_nodes:
+            slot_map[bp_node["id"]] = (bp_node["id"], 0)
+            for i, pin in enumerate(bp_node["pins"]):
+                slot_map[pin["id"]] = (bp_node["id"], i + 1)
+        # 普通节点: slot 0
+        for pn in plain_nodes:
+            slot_map[pn["id"]] = (pn["id"], 0)
+
+        # 构建预计算连线（直接包含 LiteGraph slot 索引）
+        links = []
+        for edge in self.edges:
+            if edge.edge_type == EdgeType.CONTAINS:
+                src_node = node_map.get(edge.source)
+                if (src_node and src_node.node_type == NodeType.MODULE) or edge.source in absorbed_ids:
+                    continue
+            from_info = slot_map.get(edge.source)
+            to_info = slot_map.get(edge.target)
+            if from_info and to_info:
+                style = edge_styles.get(edge.edge_type, {"color": "#999", "width": 1})
+                links.append({
+                    "fromNodeId": from_info[0],
+                    "fromSlot": from_info[1],
+                    "toNodeId": to_info[0],
+                    "toSlot": to_info[1],
+                    "color": style["color"],
+                    "edgeType": edge.edge_type.value,
+                    "label": edge.label or edge.edge_type.value,
+                })
+
+        # 外部库分组（用于绘制分组区域）
+        ext_groups: Dict[str, list] = {}
+        for pn in plain_nodes:
+            pkg = pn.get("externalPackage", "")
+            if pkg:
+                ext_groups.setdefault(pkg, []).append(pn["id"])
+
+        return {
+            "blueprintNodes": blueprint_nodes,
+            "plainNodes": plain_nodes,
+            "links": links,
+            "externalGroups": ext_groups,
+        }
+
     @staticmethod
     def _build_tooltip(node: NodeData) -> str:
         """构建节点的悬浮提示信息（纯文本，避免浏览器原生 tooltip 显示 HTML 标签）"""

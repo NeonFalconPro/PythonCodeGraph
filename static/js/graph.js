@@ -1,18 +1,25 @@
 /**
  * CodeGraph - 前端交互逻辑
- * 使用 vis-network 实现知识图谱的可视化展示
+ * 蓝图模式使用 LiteGraph.js 实现引脚精准连线（独立后端 /api/analyze/blueprint）
+ * 标准模式使用 vis-network 实现知识图谱可视化（独立后端 /api/analyze）
  */
 
 // ============ 全局变量 ============
-let network = null;        // vis-network 实例
+let network = null;        // vis-network 实例（标准模式）
 let nodesDataSet = null;   // vis DataSet (节点)
 let edgesDataSet = null;   // vis DataSet (边)
-let allNodes = [];          // 所有节点原始数据
-let allEdges = [];          // 所有边原始数据
+let allNodes = [];          // 所有节点原始数据（标准模式）
+let allEdges = [];          // 所有边原始数据（标准模式）
 let currentMetadata = null; // 当前项目元数据
 let browsePath = '';        // 当前浏览路径
-let browseParent = '';      // 上级目录路径（来自API）
-let highlightedNodeId = null; // 当前高亮的节点
+let browseParent = '';      // 上级目录路径
+let highlightedNodeId = null;
+let blueprintData = null;  // 蓝图模式数据
+let isBlueprintMode = true;
+let lastAnalyzedPath = ''; // 上次解析路径（缓存用）
+// LiteGraph 实例
+let lgGraph = null;
+let lgCanvas = null;
 
 // ============ DOM 元素 ============
 const projectPathInput = document.getElementById('projectPath');
@@ -22,6 +29,7 @@ const fitBtn = document.getElementById('fitBtn');
 const exportBtn = document.getElementById('exportBtn');
 const layoutSelect = document.getElementById('layoutSelect');
 const graphContainer = document.getElementById('graphContainer');
+const lgCanvasEl = document.getElementById('lgCanvas');
 const welcomeScreen = document.getElementById('welcomeScreen');
 const loading = document.getElementById('loading');
 const statsPanel = document.getElementById('statsPanel');
@@ -39,11 +47,12 @@ const dirList = document.getElementById('dirList');
 const selectDirBtn = document.getElementById('selectDirBtn');
 const searchInput = document.getElementById('searchInput');
 const searchCount = document.getElementById('searchCount');
+const viewModeSelect = document.getElementById('viewModeSelect');
 
 // ============ 事件监听 ============
 analyzeBtn.addEventListener('click', handleAnalyze);
 browseBtn.addEventListener('click', () => openBrowseModal());
-fitBtn.addEventListener('click', () => network && network.fit({ animation: true }));
+fitBtn.addEventListener('click', handleFit);
 exportBtn.addEventListener('click', handleExport);
 layoutSelect.addEventListener('change', handleLayoutChange);
 closeDetail.addEventListener('click', () => {
@@ -56,26 +65,50 @@ parentDirBtn.addEventListener('click', handleParentDir);
 selectDirBtn.addEventListener('click', handleSelectDir);
 searchInput.addEventListener('input', handleSearch);
 
-// 过滤器变化时重新渲染
+if (viewModeSelect) {
+    viewModeSelect.addEventListener('change', () => {
+        isBlueprintMode = viewModeSelect.value === 'blueprint';
+        // 切换模式时，如果有已解析的路径，重新调用对应后端
+        const path = projectPathInput.value.trim();
+        if (path && lastAnalyzedPath === path) {
+            // 检查是否已缓存对应模式的数据
+            if (isBlueprintMode && blueprintData) {
+                renderBlueprintGraph();
+                return;
+            } else if (!isBlueprintMode && allNodes.length > 0) {
+                renderGraph(allNodes, allEdges);
+                return;
+            }
+        }
+        if (path) {
+            handleAnalyze();
+        }
+    });
+}
+
 document.querySelectorAll('.node-filter, .edge-filter').forEach(cb => {
     cb.addEventListener('change', applyFilters);
 });
 
-// 回车键触发解析
 projectPathInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') handleAnalyze();
 });
 
-// 防止 vis-network 捕获输入框中的键盘事件（下划线_等符号会被当作缩放快捷键拦截）
 document.querySelectorAll('input[type="text"], select').forEach(el => {
     el.addEventListener('keydown', (e) => e.stopPropagation());
 });
 
+function handleFit() {
+    if (isBlueprintMode && lgCanvas) {
+        lgCanvas.ds.reset();
+        lgCanvas.setDirty(true, true);
+    } else if (network) {
+        network.fit({ animation: true });
+    }
+}
+
 // ============ 核心功能 ============
 
-/**
- * 解析项目
- */
 async function handleAnalyze() {
     const path = projectPathInput.value.trim();
     if (!path) {
@@ -87,26 +120,41 @@ async function handleAnalyze() {
     analyzeBtn.disabled = true;
 
     try {
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path }),
-        });
-
-        const result = await response.json();
-
-        if (!response.ok) {
-            throw new Error(result.detail || '解析失败');
-        }
-
-        if (result.success) {
-            allNodes = result.data.nodes;
-            allEdges = result.data.edges;
-            currentMetadata = result.metadata;
-
-            renderGraph(allNodes, allEdges);
-            showStats(currentMetadata);
-            showToast(`解析完成: ${currentMetadata.total_nodes} 个节点, ${currentMetadata.total_edges} 条关系`, 'success');
+        if (isBlueprintMode) {
+            // 蓝图模式：调用独立的蓝图后端
+            const response = await fetch('/api/analyze/blueprint', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.detail || '蓝图解析失败');
+            if (result.success) {
+                blueprintData = result.data;
+                currentMetadata = result.metadata;
+                lastAnalyzedPath = path;
+                renderBlueprintGraph();
+                showStats(currentMetadata);
+                showToast(`蓝图解析完成: ${currentMetadata.total_nodes} 个节点`, 'success');
+            }
+        } else {
+            // 标准模式：调用独立的标准后端
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.detail || '解析失败');
+            if (result.success) {
+                allNodes = result.data.nodes;
+                allEdges = result.data.edges;
+                currentMetadata = result.metadata;
+                lastAnalyzedPath = path;
+                renderGraph(allNodes, allEdges);
+                showStats(currentMetadata);
+                showToast(`解析完成: ${currentMetadata.total_nodes} 个节点, ${currentMetadata.total_edges} 条关系`, 'success');
+            }
         }
     } catch (error) {
         showToast(`错误: ${error.message}`, 'error');
@@ -116,21 +164,406 @@ async function handleAnalyze() {
     }
 }
 
+// ============ LiteGraph 蓝图模式 ============
+
 /**
- * 渲染知识图谱
+ * 渲染蓝图模式（使用 LiteGraph.js）
+ * 每个 Python 模块渲染为带引脚的蓝图节点
+ * 使用后端预计算的 links 数据精准连接引脚
  */
+function renderBlueprintGraph() {
+    if (!blueprintData) return;
+    if (typeof LiteGraph === 'undefined') {
+        showToast('LiteGraph.js 加载失败，请检查网络', 'error');
+        return;
+    }
+
+    // 隐藏标准模式容器，显示 LiteGraph 画布
+    welcomeScreen.style.display = 'none';
+    graphContainer.style.display = 'none';
+    lgCanvasEl.style.display = 'block';
+
+    // 销毁旧的 vis-network
+    if (network) {
+        network.destroy();
+        network = null;
+    }
+
+    // 调整画布尺寸
+    const mainContent = lgCanvasEl.parentElement;
+    lgCanvasEl.width = mainContent.clientWidth;
+    lgCanvasEl.height = mainContent.clientHeight;
+
+    // 清理旧 LiteGraph
+    if (lgGraph) {
+        lgGraph.stop();
+        lgGraph.clear();
+    }
+
+    // 创建 LiteGraph 图实例
+    lgGraph = new LGraph();
+
+    // 全局允许输入端口多连接
+    if (typeof LiteGraph.allow_multi_input_for_links !== 'undefined') {
+        LiteGraph.allow_multi_input_for_links = true;
+    }
+
+    const lgNodeMap = {};  // 我们的节点 ID → LiteGraph 节点实例
+    const uniquePrefix = Date.now();
+
+    // ---- 创建蓝图模块节点 ----
+    const pinIcons = { 'class': '🏷️', 'function': '⚡', 'method': '🔧', 'variable': '📌' };
+
+    blueprintData.blueprintNodes.forEach((bpNode, moduleIdx) => {
+        const typeName = 'cg/bp_' + uniquePrefix + '_' + moduleIdx;
+
+        function CodeGraphNode() {
+            // Slot 0: 模块级（用于模块→模块的导入等边）
+            this.addOutput('📄 ' + bpNode.label, 'module');
+            this.addInput('📄 ' + bpNode.label, 'module');
+            // Slot 1..N: 引脚（类、函数、方法、变量）
+            bpNode.pins.forEach(pin => {
+                const icon = pinIcons[pin.type] || '●';
+                this.addOutput(icon + ' ' + pin.label, pin.type);
+                this.addInput(icon + ' ' + pin.label, pin.type);
+            });
+
+            this.title = '📄 ' + bpNode.label;
+            this.size = this.computeSize();
+            this.size[0] = Math.max(this.size[0], 240);
+            this._bpData = bpNode;
+            this.color = '#2a4a48';
+            this.bgcolor = '#1e2230';
+            this.boxcolor = '#4ECDC4';
+        }
+        CodeGraphNode.title = '📄 ' + bpNode.label;
+        LiteGraph.registerNodeType(typeName, CodeGraphNode);
+
+        const lgNode = LiteGraph.createNode(typeName);
+        // 启用所有输入端口的多连接
+        _enableMultiConnection(lgNode);
+
+        // 网格布局：每行3个
+        const col = moduleIdx % 3;
+        const row = Math.floor(moduleIdx / 3);
+        lgNode.pos = [col * 420 + 50, row * 500 + 50];
+        lgGraph.add(lgNode);
+        lgNodeMap[bpNode.id] = lgNode;
+    });
+
+    // ---- 创建普通节点（外部库、包等） ----
+    const totalBp = blueprintData.blueprintNodes.length;
+    const bpCols = Math.min(totalBp, 3);
+
+    blueprintData.plainNodes.forEach((pn, i) => {
+        const typeName = 'cg/pn_' + uniquePrefix + '_' + i;
+
+        function PlainNode() {
+            this.addOutput('out', 'any');
+            this.addInput('in', 'any');
+            this.title = pn.label;
+            this.size = this.computeSize();
+            this.size[0] = Math.max(this.size[0], 130);
+            this._plainData = pn;
+            this.color = '#3a2820';
+            this.bgcolor = '#2a1e18';
+            this.boxcolor = pn.color || '#FF9F43';
+        }
+        PlainNode.title = pn.label;
+        LiteGraph.registerNodeType(typeName, PlainNode);
+
+        const lgNode = LiteGraph.createNode(typeName);
+        _enableMultiConnection(lgNode);
+
+        // 放在蓝图节点的右侧
+        const plainCol = i % 4;
+        const plainRow = Math.floor(i / 4);
+        lgNode.pos = [bpCols * 420 + 120 + plainCol * 220, plainRow * 120 + 50];
+        lgGraph.add(lgNode);
+        lgNodeMap[pn.id] = lgNode;
+    });
+
+    // ---- 使用后端预计算的 links 创建连线 ----
+    const linkColorData = [];  // 用于后续着色
+    if (blueprintData.links) {
+        blueprintData.links.forEach(link => {
+            const fromNode = lgNodeMap[link.fromNodeId];
+            const toNode = lgNodeMap[link.toNodeId];
+            if (fromNode && toNode) {
+                const linkResult = fromNode.connect(link.fromSlot, toNode, link.toSlot);
+                if (linkResult !== null) {
+                    linkColorData.push({
+                        originId: fromNode.id,
+                        originSlot: link.fromSlot,
+                        targetId: toNode.id,
+                        targetSlot: link.toSlot,
+                        color: link.color,
+                    });
+                }
+            }
+        });
+    }
+
+    // ---- 创建外部库分组区域（LGraphGroup） ----
+    if (blueprintData.externalGroups && typeof LGraphGroup !== 'undefined') {
+        const groupColors = [
+            '#FF9F4330', '#2ED57330', '#74B9FF30',
+            '#A29BFE30', '#FF6B8130', '#00CEC930',
+        ];
+        let gIdx = 0;
+        Object.entries(blueprintData.externalGroups).forEach(([pkg, nodeIds]) => {
+            const groupNodes = nodeIds.map(id => lgNodeMap[id]).filter(Boolean);
+            if (groupNodes.length === 0) return;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            groupNodes.forEach(n => {
+                minX = Math.min(minX, n.pos[0]);
+                minY = Math.min(minY, n.pos[1]);
+                maxX = Math.max(maxX, n.pos[0] + n.size[0]);
+                maxY = Math.max(maxY, n.pos[1] + n.size[1]);
+            });
+
+            const padding = groupNodes.length <= 2 ? 25 : 40;
+            const group = new LGraphGroup();
+            group.title = '📦 ' + pkg;
+            group.color = groupColors[gIdx % groupColors.length];
+            group.font_size = 14;
+            group._bounding = [
+                minX - padding,
+                minY - padding - 28,
+                maxX - minX + padding * 2,
+                maxY - minY + padding * 2 + 28,
+            ];
+            group.pos = [minX - padding, minY - padding - 28];
+            group.size = [maxX - minX + padding * 2, maxY - minY + padding * 2 + 28];
+            lgGraph.add(group);
+            gIdx++;
+        });
+    }
+
+    // ---- 配置 LiteGraph 渲染样式 ----
+    LiteGraph.CANVAS_GRID_SIZE = 20;
+    LiteGraph.NODE_TEXT_SIZE = 13;
+    LiteGraph.NODE_SUBTEXT_SIZE = 11;
+    LiteGraph.NODE_DEFAULT_COLOR = '#2a4a48';
+    LiteGraph.NODE_DEFAULT_BGCOLOR = '#1e2230';
+    LiteGraph.NODE_DEFAULT_BOXCOLOR = '#4ECDC4';
+    LiteGraph.DEFAULT_SHADOW_COLOR = 'rgba(0,0,0,0.4)';
+    LiteGraph.LINK_COLOR = '#9a9aaa';
+    LiteGraph.NODE_TITLE_HEIGHT = 26;
+    LiteGraph.NODE_SLOT_HEIGHT = 20;
+
+    // 设置 slot 类型颜色
+    const slotTypeColors = {
+        'module': '#4ECDC4', 'class': '#45B7D1', 'function': '#96CEB4',
+        'method': '#FFEAA7', 'variable': '#DDA0DD', 'any': '#FF9F43',
+    };
+    Object.entries(slotTypeColors).forEach(([type, color]) => {
+        LGraphCanvas.link_type_colors[type] = color;
+    });
+
+    // 创建画布
+    lgCanvas = new LGraphCanvas(lgCanvasEl, lgGraph);
+    lgCanvas.background_image = null;
+    lgCanvas.clear_background = true;
+    lgCanvas.render_canvas_border = false;
+    lgCanvas.render_connections_border = false;
+    lgCanvas.highquality_render = true;
+    lgCanvas.render_curved_connections = true;
+    lgCanvas.render_connection_arrows = true;
+    lgCanvas.connections_width = 2;
+    lgCanvas.default_connection_color = {
+        output_off: '#555', output_on: '#8e8',
+        input_off: '#555', input_on: '#8e8',
+    };
+    lgCanvas.allow_searchbox = false;
+    lgCanvas.allow_interaction = true;
+    lgCanvas.allow_dragnodes = true;
+    lgCanvas.allow_reconnect_links = false;
+    lgCanvas.read_only = false;
+    lgCanvas.background_color = '#1a1b2e';
+
+    // 节点点击事件 → 显示详情
+    lgCanvas.onNodeSelected = function(node) {
+        if (node && node._bpData) {
+            showBlueprintNodeDetail(node._bpData);
+        } else if (node && node._plainData) {
+            showPlainNodeDetail(node._plainData);
+        }
+    };
+    lgCanvas.onNodeDeselected = function() {
+        detailPanel.style.display = 'none';
+    };
+
+    // 应用连线颜色
+    _applyLinkColors(linkColorData);
+
+    // 启动渲染
+    lgGraph.start();
+
+    // 窗口尺寸变化时调整画布
+    window._lgResizeHandler = function() {
+        if (lgCanvasEl.style.display !== 'none') {
+            lgCanvasEl.width = mainContent.clientWidth;
+            lgCanvasEl.height = mainContent.clientHeight;
+            lgCanvas.resize();
+        }
+    };
+    window.removeEventListener('resize', window._lgResizeHandler);
+    window.addEventListener('resize', window._lgResizeHandler);
+}
+
+/**
+ * 启用 LiteGraph 节点所有输入端口的多连接支持
+ */
+function _enableMultiConnection(lgNode) {
+    if (!lgNode.inputs) return;
+    lgNode.inputs.forEach(inp => {
+        inp.multi_connnection = true;   // LiteGraph v0.7 spelling
+        inp.multiconnection = true;     // alternative spelling
+    });
+}
+
+/**
+ * 应用预计算的颜色到 LiteGraph 连线
+ */
+function _applyLinkColors(colorData) {
+    if (!lgGraph || !colorData || colorData.length === 0) return;
+
+    const lgLinks = lgGraph.links;
+    if (!lgLinks) return;
+
+    // 建立颜色查找表：originId_outSlot_targetId_inSlot → color
+    const colorMap = {};
+    colorData.forEach(d => {
+        colorMap[d.originId + '_' + d.originSlot + '_' + d.targetId + '_' + d.targetSlot] = d.color;
+    });
+
+    for (const linkId in lgLinks) {
+        const lgLink = lgLinks[linkId];
+        if (!lgLink) continue;
+        const key = lgLink.origin_id + '_' + lgLink.origin_slot + '_' + lgLink.target_id + '_' + lgLink.target_slot;
+        if (colorMap[key]) {
+            lgLink.color = colorMap[key];
+        }
+    }
+}
+
+/**
+ * 显示蓝图节点详情
+ */
+function showBlueprintNodeDetail(bpNode) {
+    detailTitle.textContent = bpNode.label;
+
+    const pinTypeIcons = {
+        'class': '🏷️',
+        'function': '⚡',
+        'method': '🔧',
+        'variable': '📌',
+    };
+
+    let html = '';
+    html += `<div class="detail-row">
+        <div class="detail-label">类型</div>
+        <div class="detail-value">📄 模块 (蓝图)</div>
+    </div>`;
+    html += `<div class="detail-row">
+        <div class="detail-label">标识</div>
+        <div class="detail-value"><code>${bpNode.id}</code></div>
+    </div>`;
+    if (bpNode.filePath) {
+        html += `<div class="detail-row">
+            <div class="detail-label">文件</div>
+            <div class="detail-value">${bpNode.filePath}</div>
+        </div>`;
+    }
+
+    if (bpNode.pins.length > 0) {
+        html += `<div class="detail-row">
+            <div class="detail-label">成员 (${bpNode.pins.length})</div>
+            <div class="detail-value relation-list">`;
+        bpNode.pins.forEach(pin => {
+            const icon = pinTypeIcons[pin.type] || '●';
+            const prefix = pin.parentClass ? '  ' : '';
+            html += `<div class="relation-item" title="${pin.tooltip || ''}">
+                <span class="relation-direction" style="color:${pin.color}">${icon}</span>
+                <span class="relation-type">${pin.type}</span>
+                <span class="relation-target">${prefix}${pin.label}</span>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    detailContent.innerHTML = html;
+    detailPanel.style.display = 'block';
+}
+
+/**
+ * 显示普通节点详情（外部库等）
+ */
+function showPlainNodeDetail(plainData) {
+    detailTitle.textContent = plainData.label || plainData.id;
+
+    const typeNames = {
+        package: '📦 包', external: '🔗 外部库',
+    };
+
+    let html = '';
+    html += `<div class="detail-row">
+        <div class="detail-label">类型</div>
+        <div class="detail-value">${typeNames[plainData.group] || plainData.group || '节点'}</div>
+    </div>`;
+    html += `<div class="detail-row">
+        <div class="detail-label">标识</div>
+        <div class="detail-value"><code>${plainData.id}</code></div>
+    </div>`;
+    if (plainData.title) {
+        const lines = plainData.title.split('\n');
+        lines.forEach(line => {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+                const label = line.substring(0, colonIdx).trim();
+                const value = line.substring(colonIdx + 1).trim();
+                if (label.startsWith('【') || label === '类型' || !value) return;
+                html += `<div class="detail-row">
+                    <div class="detail-label">${label}</div>
+                    <div class="detail-value">${value}</div>
+                </div>`;
+            }
+        });
+    }
+
+    detailContent.innerHTML = html;
+    detailPanel.style.display = 'block';
+}
+
+/**
+ * 停止蓝图模式（切换到标准模式时）
+ */
+function destroyBlueprintMode() {
+    if (lgGraph) {
+        lgGraph.stop();
+        lgGraph.clear();
+        lgGraph = null;
+    }
+    if (lgCanvas) {
+        lgCanvas = null;
+    }
+    lgCanvasEl.style.display = 'none';
+}
+
+// ============ 标准模式渲染（vis-network） ============
+
 function renderGraph(nodes, edges) {
+    // 关闭蓝图模式
+    destroyBlueprintMode();
+
     welcomeScreen.style.display = 'none';
     graphContainer.style.display = 'block';
+    lgCanvasEl.style.display = 'none';
 
-    // 保存每个节点/边的原始样式，用于高亮后恢复
-    nodes.forEach(n => {
-        n._originalColor = n.color;
-    });
-    edges.forEach(e => {
-        e._originalColor = e.color;
-        e._originalWidth = e.width;
-    });
+    nodes.forEach(n => { n._originalColor = n.color; });
+    edges.forEach(e => { e._originalColor = e.color; e._originalWidth = e.width; });
 
     nodesDataSet = new vis.DataSet(nodes);
     edgesDataSet = new vis.DataSet(edges);
@@ -138,40 +571,29 @@ function renderGraph(nodes, edges) {
     const data = { nodes: nodesDataSet, edges: edgesDataSet };
     const options = getGraphOptions();
 
-    if (network) {
-        network.destroy();
-    }
+    if (network) { network.destroy(); }
 
     network = new vis.Network(graphContainer, data, options);
     highlightedNodeId = null;
 
-    // 绘制外部库分组背景
     network.on('beforeDrawing', function(ctx) {
         drawExternalPackageHulls(ctx);
     });
 
-    // 安全超时：防止大图稳定化时间过长
     const stabilizationTimeout = setTimeout(() => {
-        if (network) {
-            network.stopSimulation();
-            network.fit({ animation: true });
-        }
+        if (network) { network.stopSimulation(); network.fit({ animation: true }); }
     }, 15000);
 
-    // 点击节点：显示详情 + 高亮关联
     network.on('click', (params) => {
         if (params.nodes.length > 0) {
-            const nodeId = params.nodes[0];
-            highlightNeighborhood(nodeId);
-            showNodeDetail(nodeId);
+            highlightNeighborhood(params.nodes[0]);
+            showNodeDetail(params.nodes[0]);
         } else {
-            // 点击空白区域取消高亮
             clearHighlight();
             detailPanel.style.display = 'none';
         }
     });
 
-    // 双击节点聚焦
     network.on('doubleClick', (params) => {
         if (params.nodes.length > 0) {
             network.focus(params.nodes[0], {
@@ -181,25 +603,20 @@ function renderGraph(nodes, edges) {
         }
     });
 
-    // 稳定后自适应
     network.once('stabilizationIterationsDone', () => {
         clearTimeout(stabilizationTimeout);
         network.fit({ animation: true });
     });
 }
 
-// ============ 高亮系统 ============
+// ============ 高亮系统（标准模式） ============
 
-/**
- * 高亮选中节点及其所有关联节点和边
- */
 function highlightNeighborhood(nodeId) {
     highlightedNodeId = nodeId;
 
     const allN = nodesDataSet.get();
     const allE = edgesDataSet.get();
 
-    // 找出所有与该节点直接关联的节点 ID 和边 ID
     const connectedNodeIds = new Set();
     connectedNodeIds.add(nodeId);
     const connectedEdgeIds = new Set();
@@ -212,7 +629,7 @@ function highlightNeighborhood(nodeId) {
         }
     });
 
-    // 扩展外部库链：选中节点关联的外部节点同时高亮其完整包含链路
+    // 扩展外部库链
     const nodeMap = new Map(allN.map(n => [n.id, n]));
     const containsAdj = new Map();
     allE.forEach(edge => {
@@ -242,10 +659,8 @@ function highlightNeighborhood(nodeId) {
         });
     }
 
-    // 更新节点样式
     const updatedNodes = allN.map(node => {
         if (connectedNodeIds.has(node.id)) {
-            // 关联节点：保持原色，增强显示
             return {
                 id: node.id,
                 color: node._originalColor,
@@ -263,7 +678,6 @@ function highlightNeighborhood(nodeId) {
                 },
             };
         } else {
-            // 非关联节点：大幅淡化
             return {
                 id: node.id,
                 color: { background: '#3a3b5c', border: '#2d2e52' },
@@ -275,13 +689,10 @@ function highlightNeighborhood(nodeId) {
         }
     });
 
-    // 更新边样式
     const updatedEdges = allE.map(edge => {
         if (connectedEdgeIds.has(edge.id)) {
-            // 关联边：大幅加粗 + 发光效果
             const origColorValue = (typeof edge._originalColor === 'object')
-                ? edge._originalColor.color
-                : edge._originalColor;
+                ? edge._originalColor.color : edge._originalColor;
             return {
                 id: edge.id,
                 color: { color: origColorValue, highlight: origColorValue, opacity: 1 },
@@ -290,7 +701,6 @@ function highlightNeighborhood(nodeId) {
                 shadow: { enabled: true, color: origColorValue, size: 8 },
             };
         } else {
-            // 非关联边：几乎不可见
             return {
                 id: edge.id,
                 color: { color: 'rgba(50,50,70,0.08)', highlight: 'rgba(50,50,70,0.08)', opacity: 0.05 },
@@ -305,9 +715,6 @@ function highlightNeighborhood(nodeId) {
     edgesDataSet.update(updatedEdges);
 }
 
-/**
- * 清除所有高亮，恢复原始样式
- */
 function clearHighlight() {
     if (!highlightedNodeId || !nodesDataSet || !edgesDataSet) return;
     highlightedNodeId = null;
@@ -336,75 +743,45 @@ function clearHighlight() {
     edgesDataSet.update(restoredEdges);
 }
 
-/**
- * 聚焦并高亮指定节点（从详情面板关联关系点击触发）
- */
 function focusAndHighlightNode(nodeId) {
     if (!network) return;
-
-    // 高亮该节点的邻域
     highlightNeighborhood(nodeId);
-
-    // 聚焦到该节点
     network.focus(nodeId, {
         scale: 1.2,
         animation: { duration: 600, easingFunction: 'easeInOutQuad' },
     });
-
-    // 选中该节点
     network.selectNodes([nodeId]);
-
-    // 更新详情面板
     showNodeDetail(nodeId);
 }
 
-/**
- * 获取图谱配置选项
- */
+// ============ 标准模式配置 ============
+
 function getGraphOptions() {
     const layout = layoutSelect.value;
     const nodeCount = allNodes.length;
-    // 根据节点数量动态调整稳定化参数
     const stabIterations = nodeCount > 200 ? Math.max(50, Math.floor(40000 / nodeCount)) : 200;
     const options = {
         nodes: {
-            font: {
-                color: '#e8e8f0',
-                size: 12,
-                face: 'Segoe UI, Microsoft YaHei, sans-serif',
-            },
+            font: { color: '#e8e8f0', size: 12, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
             borderWidth: 2,
             borderWidthSelected: 4,
-            shadow: {
-                enabled: true,
-                color: 'rgba(0,0,0,0.3)',
-                size: 8,
-            },
+            shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 8 },
         },
         edges: {
-            font: {
-                size: 9,
-                color: '#808090',
-                strokeWidth: 0,
-                align: 'middle',
-            },
+            font: { size: 9, color: '#808090', strokeWidth: 0, align: 'middle' },
             smooth: {
                 type: 'cubicBezier',
                 forceDirection: layout.startsWith('hierarchical') ? 'vertical' : 'none',
                 roundness: 0.5,
             },
-            arrows: {
-                to: { scaleFactor: 0.8 },
-            },
+            arrows: { to: { scaleFactor: 0.8 } },
         },
         interaction: {
             hover: true,
             tooltipDelay: 200,
             multiselect: true,
             navigationButtons: true,
-            keyboard: {
-                enabled: true,
-            },
+            keyboard: { enabled: true },
         },
         physics: {
             enabled: true,
@@ -416,10 +793,7 @@ function getGraphOptions() {
                 springConstant: 0.08,
                 damping: 0.4,
             },
-            stabilization: {
-                iterations: stabIterations,
-                updateInterval: 25,
-            },
+            stabilization: { iterations: stabIterations, updateInterval: 25 },
         },
     };
 
@@ -443,16 +817,18 @@ function getGraphOptions() {
     return options;
 }
 
-/**
- * 应用过滤器
- */
-function applyFilters() {
-    if (!allNodes.length) return;
+// ============ 过滤与布局 ============
 
-    const selectedNodeTypes = Array.from(document.querySelectorAll('.node-filter:checked'))
-        .map(cb => cb.value);
-    const selectedEdgeTypes = Array.from(document.querySelectorAll('.edge-filter:checked'))
-        .map(cb => cb.value);
+function applyFilters() {
+    if (!allNodes.length && !(blueprintData && blueprintData.blueprintNodes && blueprintData.blueprintNodes.length)) return;
+
+    if (isBlueprintMode && blueprintData) {
+        renderBlueprintGraph();
+        return;
+    }
+
+    const selectedNodeTypes = Array.from(document.querySelectorAll('.node-filter:checked')).map(cb => cb.value);
+    const selectedEdgeTypes = Array.from(document.querySelectorAll('.edge-filter:checked')).map(cb => cb.value);
 
     const filteredNodes = allNodes.filter(n => selectedNodeTypes.includes(n.group));
     const nodeIds = new Set(filteredNodes.map(n => n.id));
@@ -472,47 +848,39 @@ function applyFilters() {
     renderGraph(filteredNodes, filteredEdges);
 }
 
-/**
- * 布局变化
- */
 function handleLayoutChange() {
-    if (!network || !nodesDataSet || !edgesDataSet) return;
-    const nodes = nodesDataSet.get();
-    const edges = edgesDataSet.get();
-    renderGraph(nodes, edges);
+    if (isBlueprintMode && blueprintData) {
+        renderBlueprintGraph();
+    } else if (network && nodesDataSet && edgesDataSet) {
+        renderGraph(nodesDataSet.get(), edgesDataSet.get());
+    }
 }
 
-/**
- * 显示节点详情（右侧面板）
- */
+// ============ 节点详情（标准模式） ============
+
 function showNodeDetail(nodeId) {
-    const node = allNodes.find(n => n.id === nodeId);
+    const node = nodesDataSet.get(nodeId);
     if (!node) return;
 
-    // 去掉 emoji 前缀显示纯名称
-    const cleanLabel = node.label.replace(/^[^\w\u4e00-\u9fff]+/u, '').trim() || node.label;
+    const cleanLabel = (node.label || '').replace(/^[^\w\u4e00-\u9fff]+/u, '').trim() || node.label;
     detailTitle.textContent = cleanLabel;
 
-    let html = '';
-
-    // 类型
     const typeNames = {
         package: '📦 包', module: '📄 模块', class: '🏷️ 类',
         function: '⚡ 函数', method: '🔧 方法', variable: '📌 变量',
         external: '🔗 外部库',
     };
+
+    let html = '';
     html += `<div class="detail-row">
         <div class="detail-label">类型</div>
         <div class="detail-value">${typeNames[node.group] || node.group}</div>
     </div>`;
-
-    // ID
     html += `<div class="detail-row">
         <div class="detail-label">标识</div>
         <div class="detail-value"><code>${node.id}</code></div>
     </div>`;
 
-    // 从 tooltip 纯文本中提取详情信息
     if (node.title) {
         const lines = node.title.split('\n');
         lines.forEach(line => {
@@ -520,7 +888,6 @@ function showNodeDetail(nodeId) {
             if (colonIdx > 0) {
                 const label = line.substring(0, colonIdx).trim();
                 const value = line.substring(colonIdx + 1).trim();
-                // 跳过标题行和类型行（已单独显示），以及空值
                 if (label.startsWith('【') || label === '类型' || !value) return;
                 html += `<div class="detail-row">
                     <div class="detail-label">${label}</div>
@@ -530,8 +897,8 @@ function showNodeDetail(nodeId) {
         });
     }
 
-    // 关联关系（可点击，点击可跳转到对应节点并高亮）
-    const relatedEdges = allEdges.filter(e => e.from === nodeId || e.to === nodeId);
+    const allE = edgesDataSet.get();
+    const relatedEdges = allE.filter(e => e.from === nodeId || e.to === nodeId);
     if (relatedEdges.length > 0) {
         html += `<div class="detail-row">
             <div class="detail-label">关联关系 (${relatedEdges.length})</div>
@@ -539,9 +906,8 @@ function showNodeDetail(nodeId) {
         relatedEdges.forEach(e => {
             const direction = e.from === nodeId ? '→' : '←';
             const otherId = e.from === nodeId ? e.to : e.from;
-            const otherNode = allNodes.find(n => n.id === otherId);
-            const otherLabel = otherNode ? otherNode.label : otherId;
-            // 使用安全的 data 属性，用事件委托处理点击
+            const otherNode = nodesDataSet.get(otherId);
+            const otherLabel = otherNode ? (otherNode.label || otherId) : otherId;
             html += `<div class="relation-item" data-target-node="${encodeURIComponent(otherId)}" 
                           title="点击定位到该节点">
                 <span class="relation-direction">${direction}</span>
@@ -555,18 +921,16 @@ function showNodeDetail(nodeId) {
     detailContent.innerHTML = html;
     detailPanel.style.display = 'block';
 
-    // 绑定关联关系的点击事件（事件委托）
     detailContent.querySelectorAll('.relation-item').forEach(item => {
-        item.addEventListener('click', (e) => {
+        item.addEventListener('click', () => {
             const targetNodeId = decodeURIComponent(item.getAttribute('data-target-node'));
             focusAndHighlightNode(targetNodeId);
         });
     });
 }
 
-/**
- * 显示统计信息
- */
+// ============ 统计信息 ============
+
 function showStats(metadata) {
     statsPanel.style.display = 'block';
 
@@ -591,10 +955,18 @@ function showStats(metadata) {
     statsContent.innerHTML = html;
 }
 
-/**
- * 导出图片
- */
+// ============ 导出图片 ============
+
 function handleExport() {
+    if (isBlueprintMode && lgCanvasEl.style.display !== 'none') {
+        const link = document.createElement('a');
+        link.download = `codegraph_blueprint_${Date.now()}.png`;
+        link.href = lgCanvasEl.toDataURL('image/png');
+        link.click();
+        showToast('蓝图已导出', 'success');
+        return;
+    }
+
     if (!network) {
         showToast('请先解析项目', 'error');
         return;
@@ -653,7 +1025,6 @@ async function loadDirectory(path) {
 }
 
 function handleParentDir() {
-    // 使用 API 返回的 parent 路径，确保可以正确返回上级和驱动器列表
     loadDirectory(browseParent);
 }
 
@@ -681,15 +1052,25 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
-// ============ 外部库分组背景绘制 ============
+// ============ 外部库分组背景绘制（标准模式） ============
 
-/**
- * 在 canvas 上绘制外部库分组的背景区域
- */
+function drawRoundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
 function drawExternalPackageHulls(ctx) {
     if (!network || !nodesDataSet) return;
 
-    // 按 externalPackage 分组
     const groups = {};
     const allN = nodesDataSet.get();
     allN.forEach(node => {
@@ -724,11 +1105,13 @@ function drawExternalPackageHulls(ctx) {
         const style = hullColors[colorIdx % hullColors.length];
         colorIdx++;
 
-        const padding = 45;
+        const padding = points.length <= 2 ? 22 : 45;
         const x = minX - padding;
         const y = minY - padding - 18;
-        const w = Math.max(maxX - minX + padding * 2, 100);
-        const h = Math.max(maxY - minY + padding * 2 + 18, 60);
+        const minW = points.length === 1 ? 60 : 100;
+        const minH = points.length === 1 ? 45 : 60;
+        const w = Math.max(maxX - minX + padding * 2, minW);
+        const h = Math.max(maxY - minY + padding * 2 + 18, minH);
         const r = 12;
 
         ctx.save();
@@ -736,23 +1119,9 @@ function drawExternalPackageHulls(ctx) {
         ctx.strokeStyle = style.stroke;
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
-
-        // 圆角矩形
-        ctx.beginPath();
-        ctx.moveTo(x + r, y);
-        ctx.lineTo(x + w - r, y);
-        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-        ctx.lineTo(x + w, y + h - r);
-        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-        ctx.lineTo(x + r, y + h);
-        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-        ctx.lineTo(x, y + r);
-        ctx.quadraticCurveTo(x, y, x + r, y);
-        ctx.closePath();
+        drawRoundedRect(ctx, x, y, w, h, r);
         ctx.fill();
         ctx.stroke();
-
-        // 标签
         ctx.setLineDash([]);
         ctx.fillStyle = style.text;
         ctx.font = 'bold 13px Segoe UI, Microsoft YaHei, sans-serif';
@@ -763,17 +1132,50 @@ function drawExternalPackageHulls(ctx) {
 
 // ============ 搜索功能 ============
 
-/**
- * 搜索节点并高亮显示
- */
 function handleSearch() {
     const query = searchInput.value.trim().toLowerCase();
 
-    if (!query || !nodesDataSet) {
+    if (!query) {
         searchCount.textContent = '';
+        if (isBlueprintMode) return;
         clearHighlight();
         return;
     }
+
+    // 蓝图模式搜索 — 高亮匹配的 LiteGraph 节点
+    if (isBlueprintMode && lgGraph) {
+        const nodes = lgGraph._nodes;
+        let matchCount = 0;
+        nodes.forEach(node => {
+            const title = (node.title || '').toLowerCase();
+            let match = title.includes(query);
+            if (!match && node._bpData) {
+                match = node._bpData.pins.some(pin => {
+                    const pl = (pin.label || '').toLowerCase();
+                    const pid = (pin.id || '').toLowerCase();
+                    return pl.includes(query) || pid.includes(query);
+                });
+            }
+            if (!match && node._plainData) {
+                const pid = (node._plainData.id || '').toLowerCase();
+                match = pid.includes(query);
+            }
+            if (match) {
+                matchCount++;
+                node.color = '#2a5a38';
+                node.boxcolor = '#FFD700';
+            } else {
+                node.color = node._bpData ? '#2a4a48' : '#3a2820';
+                node.boxcolor = node._bpData ? '#4ECDC4' : (node._plainData?.color || '#FF9F43');
+            }
+        });
+        searchCount.textContent = matchCount > 0 ? `找到 ${matchCount} 个` : '无匹配';
+        lgCanvas.setDirty(true, true);
+        return;
+    }
+
+    // 标准模式搜索
+    if (!nodesDataSet) return;
 
     const allN = nodesDataSet.get();
     const matchIds = new Set();
@@ -793,7 +1195,6 @@ function handleSearch() {
         return;
     }
 
-    // 高亮匹配节点
     const updatedNodes = allN.map(node => {
         if (matchIds.has(node.id)) {
             return {
@@ -842,7 +1243,6 @@ function handleSearch() {
 
     highlightedNodeId = 'search';
 
-    // 如果匹配数量较少，自动聚焦
     if (matchIds.size > 0 && matchIds.size <= 20) {
         network.fit({ nodes: Array.from(matchIds), animation: true });
     }

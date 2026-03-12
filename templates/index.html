@@ -6,6 +6,9 @@
     <title>CodeGraph - Python 代码知识图谱</title>
     <!-- vis-network CDN -->
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- litegraph.js CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/css/litegraph.css">
+    <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/build/litegraph.min.js"></script>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -102,6 +105,14 @@
 
             <!-- 布局控制 -->
             <div class="control-group">
+                <label>显示模式</label>
+                <select id="viewModeSelect" class="input-field">
+                    <option value="blueprint">🔷 蓝图模式</option>
+                    <option value="standard">🔘 标准模式</option>
+                </select>
+            </div>
+
+            <div class="control-group">
                 <label>图谱布局</label>
                 <select id="layoutSelect" class="input-field">
                     <option value="physics">力导向布局</option>
@@ -180,6 +191,8 @@
 
             <!-- 图谱容器 -->
             <div id="graphContainer" class="graph-container" style="display:none"></div>
+            <!-- LiteGraph 蓝图容器 -->
+            <canvas id="lgCanvas" class="graph-container" style="display:none"></canvas>
 
             <!-- 节点详情面板 -->
             <div id="detailPanel" class="detail-panel" style="display:none">

@@ -1,0 +1,1661 @@
+/**
+ * CodeGraph - 前端交互逻辑
+ * 使用 vis-network 实现知识图谱的可视化展示
+ * 支持 UE5 蓝图风格显示模式
+ */
+
+// ============ 全局变量 ============
+let network = null;        // vis-network 实例
+let nodesDataSet = null;   // vis DataSet (节点)
+let edgesDataSet = null;   // vis DataSet (边)
+let allNodes = [];          // 所有节点原始数据
+let allEdges = [];          // 所有边原始数据
+let currentMetadata = null; // 当前项目元数据
+let browsePath = '';        // 当前浏览路径
+let browseParent = '';      // 上级目录路径（来自API）
+let highlightedNodeId = null; // 当前高亮的节点
+let blueprintData = null;  // 蓝图模式数据
+let isBlueprintMode = true; // 当前是否为蓝图模式
+// 蓝图节点引脚位置缓存: { nodeId: { pinId: { x, y, side } } }
+let pinPositionCache = {};
+
+// ============ DOM 元素 ============
+const projectPathInput = document.getElementById('projectPath');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const browseBtn = document.getElementById('browseBtn');
+const fitBtn = document.getElementById('fitBtn');
+const exportBtn = document.getElementById('exportBtn');
+const layoutSelect = document.getElementById('layoutSelect');
+const graphContainer = document.getElementById('graphContainer');
+const welcomeScreen = document.getElementById('welcomeScreen');
+const loading = document.getElementById('loading');
+const statsPanel = document.getElementById('statsPanel');
+const statsContent = document.getElementById('statsContent');
+const detailPanel = document.getElementById('detailPanel');
+const detailTitle = document.getElementById('detailTitle');
+const detailContent = document.getElementById('detailContent');
+const closeDetail = document.getElementById('closeDetail');
+const browseModal = document.getElementById('browseModal');
+const closeBrowse = document.getElementById('closeBrowse');
+const cancelBrowse = document.getElementById('cancelBrowse');
+const parentDirBtn = document.getElementById('parentDirBtn');
+const currentPathSpan = document.getElementById('currentPath');
+const dirList = document.getElementById('dirList');
+const selectDirBtn = document.getElementById('selectDirBtn');
+const searchInput = document.getElementById('searchInput');
+const searchCount = document.getElementById('searchCount');
+const viewModeSelect = document.getElementById('viewModeSelect');
+
+// ============ 事件监听 ============
+analyzeBtn.addEventListener('click', handleAnalyze);
+browseBtn.addEventListener('click', () => openBrowseModal());
+fitBtn.addEventListener('click', () => network && network.fit({ animation: true }));
+exportBtn.addEventListener('click', handleExport);
+layoutSelect.addEventListener('change', handleLayoutChange);
+closeDetail.addEventListener('click', () => {
+    detailPanel.style.display = 'none';
+    clearHighlight();
+});
+closeBrowse.addEventListener('click', () => browseModal.style.display = 'none');
+cancelBrowse.addEventListener('click', () => browseModal.style.display = 'none');
+parentDirBtn.addEventListener('click', handleParentDir);
+selectDirBtn.addEventListener('click', handleSelectDir);
+searchInput.addEventListener('input', handleSearch);
+
+if (viewModeSelect) {
+    viewModeSelect.addEventListener('change', () => {
+        isBlueprintMode = viewModeSelect.value === 'blueprint';
+        if (allNodes.length > 0 || (blueprintData && blueprintData.blueprintNodes.length > 0)) {
+            if (isBlueprintMode && blueprintData) {
+                renderBlueprintGraph();
+            } else {
+                renderGraph(allNodes, allEdges);
+            }
+        }
+    });
+}
+
+// 过滤器变化时重新渲染
+document.querySelectorAll('.node-filter, .edge-filter').forEach(cb => {
+    cb.addEventListener('change', applyFilters);
+});
+
+// 回车键触发解析
+projectPathInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleAnalyze();
+});
+
+// 防止 vis-network 捕获输入框中的键盘事件
+document.querySelectorAll('input[type="text"], select').forEach(el => {
+    el.addEventListener('keydown', (e) => e.stopPropagation());
+});
+
+// ============ 蓝图模式常量 ============
+const BP = {
+    HEADER_HEIGHT: 32,
+    PIN_HEIGHT: 24,
+    PIN_RADIUS: 6,
+    MIN_WIDTH: 200,
+    PADDING_X: 16,
+    PADDING_BOTTOM: 8,
+    FONT: '12px Segoe UI, Microsoft YaHei, sans-serif',
+    HEADER_FONT: 'bold 13px Segoe UI, Microsoft YaHei, sans-serif',
+    HEADER_BG: '#2a3040',
+    BODY_BG: '#1e2230',
+    BORDER_COLOR: '#3a4560',
+    BORDER_RADIUS: 8,
+    HEADER_ACCENT: '#4ECDC4',
+    PIN_ICONS: {
+        'class': '\u{1F3F7}\uFE0F',
+        'function': '\u26A1',
+        'method': '\u{1F527}',
+        'variable': '\u{1F4CC}'
+    },
+    SEPARATOR_COLOR: 'rgba(255,255,255,0.06)',
+};
+
+// ============ 核心功能 ============
+
+/**
+ * 解析项目
+ */
+async function handleAnalyze() {
+    const path = projectPathInput.value.trim();
+    if (!path) {
+        showToast('请输入项目路径', 'error');
+        return;
+    }
+
+    loading.style.display = 'flex';
+    analyzeBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || '解析失败');
+        }
+
+        if (result.success) {
+            allNodes = result.data.nodes;
+            allEdges = result.data.edges;
+            blueprintData = result.blueprint || null;
+            currentMetadata = result.metadata;
+
+            if (isBlueprintMode && blueprintData) {
+                renderBlueprintGraph();
+            } else {
+                renderGraph(allNodes, allEdges);
+            }
+            showStats(currentMetadata);
+            showToast(`解析完成: ${currentMetadata.total_nodes} 个节点, ${currentMetadata.total_edges} 条关系`, 'success');
+        }
+    } catch (error) {
+        showToast(`错误: ${error.message}`, 'error');
+    } finally {
+        loading.style.display = 'none';
+        analyzeBtn.disabled = false;
+    }
+}
+
+// ============ 蓝图模式渲染 ============
+
+/**
+ * 计算蓝图节点的尺寸
+ */
+function calcBlueprintSize(bpNode) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    ctx.font = BP.HEADER_FONT;
+    let maxW = ctx.measureText('\u{1F4C4} ' + bpNode.label).width + BP.PADDING_X * 2;
+
+    ctx.font = BP.FONT;
+    for (const pin of bpNode.pins) {
+        const icon = BP.PIN_ICONS[pin.type] || '\u25CF';
+        const prefix = pin.parentClass ? '  ' + icon + ' ' : icon + ' ';
+        const text = prefix + pin.label;
+        const w = ctx.measureText(text).width + BP.PADDING_X * 2 + BP.PIN_RADIUS * 2 + 20;
+        if (w > maxW) maxW = w;
+    }
+
+    const width = Math.max(maxW, BP.MIN_WIDTH);
+    const height = BP.HEADER_HEIGHT + bpNode.pins.length * BP.PIN_HEIGHT + BP.PADDING_BOTTOM;
+    return { width, height };
+}
+
+/**
+ * 渲染蓝图模式图谱
+ */
+function renderBlueprintGraph() {
+    if (!blueprintData) return;
+
+    welcomeScreen.style.display = 'none';
+    graphContainer.style.display = 'block';
+    pinPositionCache = {};
+
+    const visNodes = [];
+    const visEdges = [];
+
+    // 引脚所属蓝图卡的映射 pinId -> blueprintNodeId
+    const pinOwnerMap = {};
+
+    // 为蓝图节点创建 vis-network 自定义节点
+    blueprintData.blueprintNodes.forEach(bpNode => {
+        const { width, height } = calcBlueprintSize(bpNode);
+
+        bpNode.pins.forEach(pin => {
+            pinOwnerMap[pin.id] = bpNode.id;
+        });
+
+        visNodes.push({
+            id: bpNode.id,
+            shape: 'custom',
+            ctxRenderer: makeBlueprintRenderer(bpNode, width, height),
+            size: Math.max(width, height) / 2,
+            _bpData: bpNode,
+            _bpWidth: width,
+            _bpHeight: height,
+            label: bpNode.label,
+            group: 'module',
+            title: bpNode.title,
+            _originalColor: bpNode.color,
+        });
+    });
+
+    // 普通节点（外部库、包等）
+    blueprintData.plainNodes.forEach(pn => {
+        visNodes.push({
+            id: pn.id,
+            label: pn.label,
+            color: pn.color,
+            shape: pn.shape || 'dot',
+            size: pn.size || 12,
+            title: pn.title,
+            group: pn.group || 'external',
+            _originalColor: pn.color,
+            externalPackage: pn.externalPackage || '',
+        });
+    });
+
+    // 保存原始颜色到边
+    blueprintData.edges.forEach(e => {
+        e._originalColor = { color: e.color };
+        e._originalWidth = e.width;
+    });
+
+    // 边：source/target 可能是引脚 ID，需要映射到蓝图节点 ID
+    blueprintData.edges.forEach(edge => {
+        const fromNode = pinOwnerMap[edge.from] || edge.from;
+        const toNode = pinOwnerMap[edge.to] || edge.to;
+        const isPinEdge = (edge.from !== fromNode) || (edge.to !== toNode);
+
+        visEdges.push({
+            from: fromNode,
+            to: toNode,
+            label: isPinEdge ? '' : edge.label,
+            color: isPinEdge ? { color: 'rgba(0,0,0,0)', opacity: 0 } : { color: edge.color },
+            width: isPinEdge ? 0 : edge.width,
+            arrows: isPinEdge ? '' : 'to',
+            dashes: edge.edgeType === 'contains' ? [6, 4] : false,
+            font: isPinEdge ? { size: 0 } : { size: 10, align: 'middle', color: '#808090', strokeWidth: 0 },
+            _originalColor: { color: edge.color },
+            _originalWidth: edge.width,
+            _fromPin: edge.from !== fromNode ? edge.from : null,
+            _toPin: edge.to !== toNode ? edge.to : null,
+            _edgeType: edge.edgeType,
+            _isPinEdge: isPinEdge,
+            _drawState: 'normal',
+        });
+    });
+
+    nodesDataSet = new vis.DataSet(visNodes);
+    edgesDataSet = new vis.DataSet(visEdges);
+
+    // 保存供其他函数使用
+    allNodes = visNodes;
+    allEdges = visEdges;
+
+    const data = { nodes: nodesDataSet, edges: edgesDataSet };
+    const options = getBlueprintOptions();
+
+    if (network) {
+        network.destroy();
+    }
+
+    network = new vis.Network(graphContainer, data, options);
+    highlightedNodeId = null;
+
+    // 绘制外部库分组背景
+    network.on('beforeDrawing', function(ctx) {
+        drawExternalPackageHulls(ctx);
+    });
+
+    // 绘制引脚级别的自定义连线
+    network.on('afterDrawing', function(ctx) {
+        drawPinEdges(ctx);
+    });
+
+    // 安全超时
+    const stabilizationTimeout = setTimeout(() => {
+        if (network) {
+            network.stopSimulation();
+            network.fit({ animation: true });
+        }
+    }, 15000);
+
+    // 点击节点
+    network.on('click', (params) => {
+        if (params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            const clickedPin = getClickedPin(nodeId, params.pointer.canvas);
+            if (clickedPin) {
+                highlightPinNeighborhood(nodeId, clickedPin.id);
+                showPinDetail(nodeId, clickedPin);
+            } else {
+                highlightNeighborhood(nodeId);
+                showNodeDetail(nodeId);
+            }
+        } else {
+            clearHighlight();
+            detailPanel.style.display = 'none';
+        }
+    });
+
+    // 双击节点聚焦
+    network.on('doubleClick', (params) => {
+        if (params.nodes.length > 0) {
+            network.focus(params.nodes[0], {
+                scale: 1.5,
+                animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+            });
+        }
+    });
+
+    network.once('stabilizationIterationsDone', () => {
+        clearTimeout(stabilizationTimeout);
+        network.fit({ animation: true });
+    });
+}
+
+/**
+ * 创建蓝图节点的 ctxRenderer
+ */
+function makeBlueprintRenderer(bpNode, width, height) {
+    return function({ ctx, id, x, y, state: { selected, hover }, style }) {
+        const halfW = width / 2;
+        const halfH = height / 2;
+        const left = x - halfW;
+        const top = y - halfH;
+
+        // --- 绘制卡片主体 ---
+        ctx.save();
+
+        // 外发光（选中时）
+        if (selected) {
+            ctx.shadowColor = 'rgba(108, 92, 231, 0.6)';
+            ctx.shadowBlur = 20;
+        } else if (hover) {
+            ctx.shadowColor = 'rgba(78, 205, 196, 0.3)';
+            ctx.shadowBlur = 10;
+        }
+
+        // 卡片背景 - 圆角矩形
+        drawRoundedRect(ctx, left, top, width, height, BP.BORDER_RADIUS);
+        ctx.fillStyle = BP.BODY_BG;
+        ctx.fill();
+        ctx.strokeStyle = selected ? '#6c5ce7' : (hover ? '#4ECDC4' : BP.BORDER_COLOR);
+        ctx.lineWidth = selected ? 2.5 : 1.5;
+        ctx.stroke();
+
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+
+        // --- 标题栏 ---
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(left + BP.BORDER_RADIUS, top);
+        ctx.lineTo(left + width - BP.BORDER_RADIUS, top);
+        ctx.quadraticCurveTo(left + width, top, left + width, top + BP.BORDER_RADIUS);
+        ctx.lineTo(left + width, top + BP.HEADER_HEIGHT);
+        ctx.lineTo(left, top + BP.HEADER_HEIGHT);
+        ctx.lineTo(left, top + BP.BORDER_RADIUS);
+        ctx.quadraticCurveTo(left, top, left + BP.BORDER_RADIUS, top);
+        ctx.closePath();
+        const headerGrad = ctx.createLinearGradient(left, top, left + width, top);
+        headerGrad.addColorStop(0, '#2a4a48');
+        headerGrad.addColorStop(1, '#2a3040');
+        ctx.fillStyle = headerGrad;
+        ctx.fill();
+
+        // 标题栏底部分隔线
+        ctx.beginPath();
+        ctx.moveTo(left, top + BP.HEADER_HEIGHT);
+        ctx.lineTo(left + width, top + BP.HEADER_HEIGHT);
+        ctx.strokeStyle = BP.HEADER_ACCENT;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+
+        // 标题文字
+        ctx.fillStyle = '#e8e8f0';
+        ctx.font = BP.HEADER_FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('\u{1F4C4} ' + bpNode.label, left + BP.PADDING_X, top + BP.HEADER_HEIGHT / 2);
+
+        // --- 引脚列表 ---
+        const pinPositions = {};
+        bpNode.pins.forEach((pin, i) => {
+            const pinY = top + BP.HEADER_HEIGHT + i * BP.PIN_HEIGHT + BP.PIN_HEIGHT / 2;
+            const icon = BP.PIN_ICONS[pin.type] || '\u25CF';
+            const isMethod = pin.type === 'method';
+            const indent = pin.parentClass ? 20 : 0;
+
+            // 引脚行交替背景
+            if (i % 2 === 0) {
+                ctx.fillStyle = 'rgba(255,255,255,0.02)';
+                ctx.fillRect(left, top + BP.HEADER_HEIGHT + i * BP.PIN_HEIGHT, width, BP.PIN_HEIGHT);
+            }
+
+            // 左侧圆点（输入引脚）
+            const pinDotX = left + 8 + indent;
+            ctx.beginPath();
+            ctx.arc(pinDotX, pinY, BP.PIN_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = pin.color;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 右侧圆点（输出引脚）
+            const pinDotXR = left + width - 8;
+            ctx.beginPath();
+            ctx.arc(pinDotXR, pinY, BP.PIN_RADIUS - 1, 0, Math.PI * 2);
+            ctx.fillStyle = pin.color;
+            ctx.globalAlpha = 0.5;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+
+            // 引脚文字
+            ctx.fillStyle = isMethod ? '#c8c8d0' : '#e8e8f0';
+            ctx.font = isMethod ? '11px Segoe UI, Microsoft YaHei, sans-serif' : BP.FONT;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const pinLabel = icon + ' ' + pin.label;
+            ctx.fillText(pinLabel, pinDotX + BP.PIN_RADIUS + 6, pinY);
+
+            // 类型标签（靠右）
+            ctx.fillStyle = 'rgba(160,160,192,0.4)';
+            ctx.font = '10px Segoe UI, Microsoft YaHei, sans-serif';
+            ctx.textAlign = 'right';
+            const typeLabels = { 'class': 'cls', 'function': 'fn', 'method': 'mtd', 'variable': 'var' };
+            ctx.fillText(typeLabels[pin.type] || '', pinDotXR - BP.PIN_RADIUS - 4, pinY);
+            ctx.textAlign = 'left';
+
+            // 记录引脚位置
+            pinPositions[pin.id] = {
+                leftX: pinDotX,
+                rightX: pinDotXR,
+                y: pinY,
+            };
+        });
+
+        pinPositionCache[bpNode.id] = pinPositions;
+        ctx.restore();
+
+        return {
+            drawNode: undefined,
+            drawExternalLabel: undefined,
+            nodeDimensions: { width, height },
+        };
+    };
+}
+
+/**
+ * 绘制圆角矩形路径
+ */
+function drawRoundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+/**
+ * 获取点击的引脚
+ */
+function getClickedPin(nodeId, canvasPos) {
+    const node = nodesDataSet.get(nodeId);
+    if (!node || !node._bpData) return null;
+
+    const positions = network.getPositions([nodeId]);
+    const pos = positions[nodeId];
+    if (!pos) return null;
+
+    const pins = node._bpData.pins;
+    const halfW = node._bpWidth / 2;
+    const halfH = node._bpHeight / 2;
+    const left = pos.x - halfW;
+    const top = pos.y - halfH;
+
+    for (let i = 0; i < pins.length; i++) {
+        const pinY = top + BP.HEADER_HEIGHT + i * BP.PIN_HEIGHT + BP.PIN_HEIGHT / 2;
+        const indent = pins[i].parentClass ? 20 : 0;
+        const pinDotX = left + 8 + indent;
+        const pinDotXR = left + node._bpWidth - 8;
+
+        const dx1 = canvasPos.x - pinDotX;
+        const dy1 = canvasPos.y - pinY;
+        const dx2 = canvasPos.x - pinDotXR;
+        const dy2 = canvasPos.y - pinY;
+
+        if (dx1 * dx1 + dy1 * dy1 < 150 || dx2 * dx2 + dy2 * dy2 < 150) {
+            return pins[i];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 蓝图模式的配置选项
+ */
+function getBlueprintOptions() {
+    const nodeCount = (blueprintData?.blueprintNodes.length || 0) + (blueprintData?.plainNodes.length || 0);
+    const stabIterations = nodeCount > 100 ? Math.max(50, Math.floor(20000 / nodeCount)) : 200;
+
+    return {
+        nodes: {
+            font: {
+                color: '#e8e8f0',
+                size: 12,
+                face: 'Segoe UI, Microsoft YaHei, sans-serif',
+            },
+            borderWidth: 2,
+            borderWidthSelected: 4,
+            shadow: {
+                enabled: true,
+                color: 'rgba(0,0,0,0.3)',
+                size: 8,
+            },
+        },
+        edges: {
+            font: {
+                size: 9,
+                color: '#808090',
+                strokeWidth: 0,
+                align: 'middle',
+            },
+            smooth: {
+                type: 'cubicBezier',
+                forceDirection: 'none',
+                roundness: 0.4,
+            },
+            arrows: {
+                to: { scaleFactor: 0.8 },
+            },
+        },
+        interaction: {
+            hover: true,
+            tooltipDelay: 200,
+            multiselect: true,
+            navigationButtons: true,
+            keyboard: { enabled: true },
+        },
+        physics: {
+            enabled: true,
+            solver: 'forceAtlas2Based',
+            forceAtlas2Based: {
+                gravitationalConstant: -120,
+                centralGravity: 0.005,
+                springLength: 300,
+                springConstant: 0.04,
+                damping: 0.5,
+            },
+            stabilization: {
+                iterations: stabIterations,
+                updateInterval: 25,
+            },
+        },
+        layout: {
+            hierarchical: { enabled: false },
+        },
+    };
+}
+
+// ============ 标准模式渲染 ============
+
+/**
+ * 渲染知识图谱（标准模式）
+ */
+function renderGraph(nodes, edges) {
+    welcomeScreen.style.display = 'none';
+    graphContainer.style.display = 'block';
+
+    nodes.forEach(n => {
+        n._originalColor = n.color;
+    });
+    edges.forEach(e => {
+        e._originalColor = e.color;
+        e._originalWidth = e.width;
+    });
+
+    nodesDataSet = new vis.DataSet(nodes);
+    edgesDataSet = new vis.DataSet(edges);
+
+    const data = { nodes: nodesDataSet, edges: edgesDataSet };
+    const options = getGraphOptions();
+
+    if (network) {
+        network.destroy();
+    }
+
+    network = new vis.Network(graphContainer, data, options);
+    highlightedNodeId = null;
+
+    network.on('beforeDrawing', function(ctx) {
+        drawExternalPackageHulls(ctx);
+    });
+
+    const stabilizationTimeout = setTimeout(() => {
+        if (network) {
+            network.stopSimulation();
+            network.fit({ animation: true });
+        }
+    }, 15000);
+
+    network.on('click', (params) => {
+        if (params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            highlightNeighborhood(nodeId);
+            showNodeDetail(nodeId);
+        } else {
+            clearHighlight();
+            detailPanel.style.display = 'none';
+        }
+    });
+
+    network.on('doubleClick', (params) => {
+        if (params.nodes.length > 0) {
+            network.focus(params.nodes[0], {
+                scale: 1.5,
+                animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+            });
+        }
+    });
+
+    network.once('stabilizationIterationsDone', () => {
+        clearTimeout(stabilizationTimeout);
+        network.fit({ animation: true });
+    });
+}
+
+// ============ 高亮系统 ============
+
+/**
+ * 高亮选中节点及其所有关联节点和边
+ */
+function highlightNeighborhood(nodeId) {
+    highlightedNodeId = nodeId;
+
+    const allN = nodesDataSet.get();
+    const allE = edgesDataSet.get();
+
+    const connectedNodeIds = new Set();
+    connectedNodeIds.add(nodeId);
+    const connectedEdgeIds = new Set();
+
+    allE.forEach(edge => {
+        if (edge.from === nodeId || edge.to === nodeId) {
+            connectedNodeIds.add(edge.from);
+            connectedNodeIds.add(edge.to);
+            connectedEdgeIds.add(edge.id);
+        }
+    });
+
+    // 扩展外部库链
+    const nodeMap = new Map(allN.map(n => [n.id, n]));
+    const containsAdj = new Map();
+    allE.forEach(edge => {
+        if (edge.label && (edge.label.includes('包含') || edge.label.includes('定义'))) {
+            if (!containsAdj.has(edge.from)) containsAdj.set(edge.from, []);
+            containsAdj.get(edge.from).push({ neighbor: edge.to, edgeId: edge.id });
+            if (!containsAdj.has(edge.to)) containsAdj.set(edge.to, []);
+            containsAdj.get(edge.to).push({ neighbor: edge.from, edgeId: edge.id });
+        }
+    });
+    const expandQueue = [];
+    connectedNodeIds.forEach(id => {
+        const node = nodeMap.get(id);
+        if (node && node.group === 'external') expandQueue.push(id);
+    });
+    while (expandQueue.length > 0) {
+        const cur = expandQueue.shift();
+        (containsAdj.get(cur) || []).forEach(({ neighbor, edgeId }) => {
+            if (!connectedNodeIds.has(neighbor)) {
+                const n = nodeMap.get(neighbor);
+                if (n && n.group === 'external') {
+                    connectedNodeIds.add(neighbor);
+                    connectedEdgeIds.add(edgeId);
+                    expandQueue.push(neighbor);
+                }
+            }
+        });
+    }
+
+    const updatedNodes = allN.map(node => {
+        if (connectedNodeIds.has(node.id)) {
+            return {
+                id: node.id,
+                color: node._originalColor,
+                opacity: 1,
+                borderWidth: node.id === nodeId ? 5 : 3,
+                font: {
+                    color: '#ffffff',
+                    size: node.id === nodeId ? 16 : 13,
+                    face: 'Segoe UI, Microsoft YaHei, sans-serif',
+                },
+                shadow: {
+                    enabled: true,
+                    color: node.id === nodeId ? 'rgba(108,92,231,0.7)' : 'rgba(255,255,255,0.3)',
+                    size: node.id === nodeId ? 18 : 10,
+                },
+            };
+        } else {
+            return {
+                id: node.id,
+                color: { background: '#3a3b5c', border: '#2d2e52' },
+                opacity: 0.12,
+                borderWidth: 1,
+                font: { color: 'rgba(160,160,192,0.2)', size: 9, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    const updatedEdges = allE.map(edge => {
+        if (edge._isPinEdge) {
+            return {
+                id: edge.id,
+                _drawState: connectedEdgeIds.has(edge.id) ? 'highlight' : 'dim',
+                color: { color: 'rgba(0,0,0,0)', opacity: 0 },
+                width: 0,
+                font: { size: 0 },
+            };
+        }
+        if (connectedEdgeIds.has(edge.id)) {
+            const origColorValue = (typeof edge._originalColor === 'object')
+                ? edge._originalColor.color
+                : edge._originalColor;
+            return {
+                id: edge.id,
+                color: { color: origColorValue, highlight: origColorValue, opacity: 1 },
+                width: (edge._originalWidth || 1) + 4,
+                font: { size: 12, color: '#e8e8f0', strokeWidth: 3, strokeColor: '#1a1b2e' },
+                shadow: { enabled: true, color: origColorValue, size: 8 },
+            };
+        } else {
+            return {
+                id: edge.id,
+                color: { color: 'rgba(50,50,70,0.08)', highlight: 'rgba(50,50,70,0.08)', opacity: 0.05 },
+                width: 0.3,
+                font: { size: 0 },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    nodesDataSet.update(updatedNodes);
+    edgesDataSet.update(updatedEdges);
+}
+
+/**
+ * 高亮引脚关联（蓝图模式）
+ */
+function highlightPinNeighborhood(nodeId, pinId) {
+    highlightedNodeId = nodeId;
+
+    const allN = nodesDataSet.get();
+    const allE = edgesDataSet.get();
+
+    const connectedNodeIds = new Set();
+    connectedNodeIds.add(nodeId);
+    const connectedEdgeIds = new Set();
+
+    allE.forEach(edge => {
+        if (edge._fromPin === pinId || edge._toPin === pinId ||
+            edge.from === nodeId || edge.to === nodeId) {
+            connectedNodeIds.add(edge.from);
+            connectedNodeIds.add(edge.to);
+            connectedEdgeIds.add(edge.id);
+        }
+    });
+
+    const updatedNodes = allN.map(node => {
+        if (connectedNodeIds.has(node.id)) {
+            return {
+                id: node.id,
+                opacity: 1,
+                borderWidth: node.id === nodeId ? 5 : 3,
+                shadow: {
+                    enabled: true,
+                    color: node.id === nodeId ? 'rgba(108,92,231,0.7)' : 'rgba(255,255,255,0.3)',
+                    size: node.id === nodeId ? 18 : 10,
+                },
+            };
+        } else {
+            return {
+                id: node.id,
+                opacity: 0.12,
+                borderWidth: 1,
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    const updatedEdges = allE.map(edge => {
+        if (edge._isPinEdge) {
+            return {
+                id: edge.id,
+                _drawState: connectedEdgeIds.has(edge.id) ? 'highlight' : 'dim',
+                color: { color: 'rgba(0,0,0,0)', opacity: 0 },
+                width: 0,
+                font: { size: 0 },
+            };
+        }
+        if (connectedEdgeIds.has(edge.id)) {
+            const origColorValue = (typeof edge._originalColor === 'object')
+                ? edge._originalColor.color
+                : edge._originalColor;
+            return {
+                id: edge.id,
+                color: { color: origColorValue, highlight: origColorValue, opacity: 1 },
+                width: (edge._originalWidth || 1) + 4,
+                font: { size: 12, color: '#e8e8f0', strokeWidth: 3, strokeColor: '#1a1b2e' },
+                shadow: { enabled: true, color: origColorValue, size: 8 },
+            };
+        } else {
+            return {
+                id: edge.id,
+                color: { color: 'rgba(50,50,70,0.08)', highlight: 'rgba(50,50,70,0.08)', opacity: 0.05 },
+                width: 0.3,
+                font: { size: 0 },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    nodesDataSet.update(updatedNodes);
+    edgesDataSet.update(updatedEdges);
+}
+
+/**
+ * 清除所有高亮，恢复原始样式
+ */
+function clearHighlight() {
+    if (!highlightedNodeId || !nodesDataSet || !edgesDataSet) return;
+    highlightedNodeId = null;
+
+    const allN = nodesDataSet.get();
+    const allE = edgesDataSet.get();
+
+    const restoredNodes = allN.map(node => ({
+        id: node.id,
+        color: node._originalColor,
+        opacity: 1,
+        borderWidth: 2,
+        font: { color: '#e8e8f0', size: 12, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 8 },
+    }));
+
+    const restoredEdges = allE.map(edge => {
+        if (edge._isPinEdge) {
+            return {
+                id: edge.id,
+                _drawState: 'normal',
+                color: { color: 'rgba(0,0,0,0)', opacity: 0 },
+                width: 0,
+                font: { size: 0 },
+            };
+        }
+        return {
+            id: edge.id,
+            color: edge._originalColor,
+            width: edge._originalWidth || 1,
+            font: { size: 9, color: '#808090', strokeWidth: 0, align: 'middle' },
+            shadow: { enabled: false },
+        };
+    });
+
+    nodesDataSet.update(restoredNodes);
+    edgesDataSet.update(restoredEdges);
+}
+
+/**
+ * 聚焦并高亮指定节点
+ */
+function focusAndHighlightNode(nodeId) {
+    if (!network) return;
+    highlightNeighborhood(nodeId);
+    network.focus(nodeId, {
+        scale: 1.2,
+        animation: { duration: 600, easingFunction: 'easeInOutQuad' },
+    });
+    network.selectNodes([nodeId]);
+    showNodeDetail(nodeId);
+}
+
+/**
+ * 获取图谱配置选项（标准模式）
+ */
+function getGraphOptions() {
+    const layout = layoutSelect.value;
+    const nodeCount = allNodes.length;
+    const stabIterations = nodeCount > 200 ? Math.max(50, Math.floor(40000 / nodeCount)) : 200;
+    const options = {
+        nodes: {
+            font: {
+                color: '#e8e8f0',
+                size: 12,
+                face: 'Segoe UI, Microsoft YaHei, sans-serif',
+            },
+            borderWidth: 2,
+            borderWidthSelected: 4,
+            shadow: {
+                enabled: true,
+                color: 'rgba(0,0,0,0.3)',
+                size: 8,
+            },
+        },
+        edges: {
+            font: {
+                size: 9,
+                color: '#808090',
+                strokeWidth: 0,
+                align: 'middle',
+            },
+            smooth: {
+                type: 'cubicBezier',
+                forceDirection: layout.startsWith('hierarchical') ? 'vertical' : 'none',
+                roundness: 0.5,
+            },
+            arrows: {
+                to: { scaleFactor: 0.8 },
+            },
+        },
+        interaction: {
+            hover: true,
+            tooltipDelay: 200,
+            multiselect: true,
+            navigationButtons: true,
+            keyboard: { enabled: true },
+        },
+        physics: {
+            enabled: true,
+            solver: 'forceAtlas2Based',
+            forceAtlas2Based: {
+                gravitationalConstant: -60,
+                centralGravity: 0.01,
+                springLength: 150,
+                springConstant: 0.08,
+                damping: 0.4,
+            },
+            stabilization: {
+                iterations: stabIterations,
+                updateInterval: 25,
+            },
+        },
+    };
+
+    if (layout.startsWith('hierarchical')) {
+        const direction = layout.split('-')[1] || 'UD';
+        options.layout = {
+            hierarchical: {
+                enabled: true,
+                direction: direction,
+                sortMethod: 'hubsize',
+                levelSeparation: 150,
+                nodeSpacing: 120,
+                treeSpacing: 200,
+            },
+        };
+        options.physics.enabled = false;
+    } else {
+        options.layout = { hierarchical: { enabled: false } };
+    }
+
+    return options;
+}
+
+/**
+ * 应用过滤器
+ */
+function applyFilters() {
+    if (!allNodes.length && !(blueprintData && blueprintData.blueprintNodes.length)) return;
+
+    if (isBlueprintMode && blueprintData) {
+        renderBlueprintGraph();
+        return;
+    }
+
+    const selectedNodeTypes = Array.from(document.querySelectorAll('.node-filter:checked'))
+        .map(cb => cb.value);
+    const selectedEdgeTypes = Array.from(document.querySelectorAll('.edge-filter:checked'))
+        .map(cb => cb.value);
+
+    const filteredNodes = allNodes.filter(n => selectedNodeTypes.includes(n.group));
+    const nodeIds = new Set(filteredNodes.map(n => n.id));
+    const filteredEdges = allEdges.filter(e =>
+        nodeIds.has(e.from) && nodeIds.has(e.to) &&
+        selectedEdgeTypes.some(t => e.label && (
+            (t === 'imports' && e.label.includes('导入')) ||
+            (t === 'inherits' && e.label.includes('继承')) ||
+            (t === 'contains' && (e.label.includes('包含') || e.label.includes('定义'))) ||
+            (t === 'calls' && e.label.includes('调用')) ||
+            (t === 'decorates' && e.label.includes('装饰')) ||
+            (t === 'instantiates' && e.label.includes('实例化')) ||
+            (t === 'uses' && e.label.includes('使用'))
+        ))
+    );
+
+    renderGraph(filteredNodes, filteredEdges);
+}
+
+/**
+ * 布局变化
+ */
+function handleLayoutChange() {
+    if (!network || !nodesDataSet || !edgesDataSet) return;
+    if (isBlueprintMode && blueprintData) {
+        renderBlueprintGraph();
+    } else {
+        const nodes = nodesDataSet.get();
+        const edges = edgesDataSet.get();
+        renderGraph(nodes, edges);
+    }
+}
+
+/**
+ * 显示引脚详情
+ */
+function showPinDetail(nodeId, pin) {
+    detailTitle.textContent = pin.label;
+
+    const typeNames = {
+        'class': '\u{1F3F7}\uFE0F 类',
+        'function': '\u26A1 函数',
+        'method': '\u{1F527} 方法',
+        'variable': '\u{1F4CC} 变量',
+    };
+
+    let html = '';
+    html += `<div class="detail-row">
+        <div class="detail-label">类型</div>
+        <div class="detail-value">${typeNames[pin.type] || pin.type}</div>
+    </div>`;
+    html += `<div class="detail-row">
+        <div class="detail-label">标识</div>
+        <div class="detail-value"><code>${pin.id}</code></div>
+    </div>`;
+    if (pin.parentClass) {
+        html += `<div class="detail-row">
+            <div class="detail-label">所属类</div>
+            <div class="detail-value">${pin.parentClass}</div>
+        </div>`;
+    }
+
+    if (pin.tooltip) {
+        const lines = pin.tooltip.split('\n');
+        lines.forEach(line => {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+                const label = line.substring(0, colonIdx).trim();
+                const value = line.substring(colonIdx + 1).trim();
+                if (label.startsWith('\u3010') || label === '类型' || !value) return;
+                html += `<div class="detail-row">
+                    <div class="detail-label">${label}</div>
+                    <div class="detail-value">${value}</div>
+                </div>`;
+            }
+        });
+    }
+
+    const allE = edgesDataSet.get();
+    const relatedEdges = allE.filter(e => e._fromPin === pin.id || e._toPin === pin.id);
+    if (relatedEdges.length > 0) {
+        html += `<div class="detail-row">
+            <div class="detail-label">关联关系 (${relatedEdges.length})</div>
+            <div class="detail-value relation-list">`;
+        relatedEdges.forEach(e => {
+            const direction = e._fromPin === pin.id ? '\u2192' : '\u2190';
+            const otherId = e._fromPin === pin.id ? e.to : e.from;
+            const otherNode = nodesDataSet.get(otherId);
+            const otherLabel = otherNode ? (otherNode.label || otherId) : otherId;
+            html += `<div class="relation-item" data-target-node="${encodeURIComponent(otherId)}" 
+                          title="点击定位到该节点">
+                <span class="relation-direction">${direction}</span>
+                <span class="relation-type">${e.label}</span>
+                <span class="relation-target">${otherLabel}</span>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    detailContent.innerHTML = html;
+    detailPanel.style.display = 'block';
+
+    detailContent.querySelectorAll('.relation-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const targetNodeId = decodeURIComponent(item.getAttribute('data-target-node'));
+            focusAndHighlightNode(targetNodeId);
+        });
+    });
+}
+
+/**
+ * 显示节点详情（右侧面板）
+ */
+function showNodeDetail(nodeId) {
+    const node = nodesDataSet.get(nodeId);
+    if (!node) return;
+
+    // 蓝图节点：显示卡片信息和引脚列表
+    if (node._bpData) {
+        const bpNode = node._bpData;
+        detailTitle.textContent = bpNode.label;
+
+        let html = '';
+        html += `<div class="detail-row">
+            <div class="detail-label">类型</div>
+            <div class="detail-value">\u{1F4C4} 模块 (蓝图)</div>
+        </div>`;
+        html += `<div class="detail-row">
+            <div class="detail-label">标识</div>
+            <div class="detail-value"><code>${bpNode.id}</code></div>
+        </div>`;
+        if (bpNode.filePath) {
+            html += `<div class="detail-row">
+                <div class="detail-label">文件</div>
+                <div class="detail-value">${bpNode.filePath}</div>
+            </div>`;
+        }
+
+        if (bpNode.pins.length > 0) {
+            html += `<div class="detail-row">
+                <div class="detail-label">成员 (${bpNode.pins.length})</div>
+                <div class="detail-value relation-list">`;
+            bpNode.pins.forEach(pin => {
+                const icon = BP.PIN_ICONS[pin.type] || '\u25CF';
+                const prefix = pin.parentClass ? '  ' : '';
+                html += `<div class="relation-item" data-pin-id="${encodeURIComponent(pin.id)}" 
+                              data-node-id="${encodeURIComponent(nodeId)}"
+                              title="${pin.tooltip || ''}">
+                    <span class="relation-direction" style="color:${pin.color}">${icon}</span>
+                    <span class="relation-type">${pin.type}</span>
+                    <span class="relation-target">${prefix}${pin.label}</span>
+                </div>`;
+            });
+            html += `</div></div>`;
+        }
+
+        const allE = edgesDataSet.get();
+        const relatedEdges = allE.filter(e => e.from === nodeId || e.to === nodeId);
+        if (relatedEdges.length > 0) {
+            html += `<div class="detail-row">
+                <div class="detail-label">关联关系 (${relatedEdges.length})</div>
+                <div class="detail-value relation-list">`;
+            relatedEdges.forEach(e => {
+                const direction = e.from === nodeId ? '\u2192' : '\u2190';
+                const otherId = e.from === nodeId ? e.to : e.from;
+                const otherNode = nodesDataSet.get(otherId);
+                const otherLabel = otherNode ? (otherNode.label || otherId) : otherId;
+                html += `<div class="relation-item" data-target-node="${encodeURIComponent(otherId)}" 
+                              title="点击定位到该节点">
+                    <span class="relation-direction">${direction}</span>
+                    <span class="relation-type">${e.label}</span>
+                    <span class="relation-target">${otherLabel}</span>
+                </div>`;
+            });
+            html += `</div></div>`;
+        }
+
+        detailContent.innerHTML = html;
+        detailPanel.style.display = 'block';
+
+        detailContent.querySelectorAll('.relation-item[data-pin-id]').forEach(item => {
+            item.addEventListener('click', () => {
+                const pinId = decodeURIComponent(item.getAttribute('data-pin-id'));
+                const nId = decodeURIComponent(item.getAttribute('data-node-id'));
+                const pin = bpNode.pins.find(p => p.id === pinId);
+                if (pin) {
+                    highlightPinNeighborhood(nId, pinId);
+                    showPinDetail(nId, pin);
+                }
+            });
+        });
+
+        detailContent.querySelectorAll('.relation-item[data-target-node]').forEach(item => {
+            if (item.hasAttribute('data-pin-id')) return;
+            item.addEventListener('click', () => {
+                const targetNodeId = decodeURIComponent(item.getAttribute('data-target-node'));
+                focusAndHighlightNode(targetNodeId);
+            });
+        });
+
+        return;
+    }
+
+    // 标准节点详情
+    const cleanLabel = (node.label || '').replace(/^[^\w\u4e00-\u9fff]+/u, '').trim() || node.label;
+    detailTitle.textContent = cleanLabel;
+
+    let html = '';
+    const typeNames = {
+        package: '\u{1F4E6} 包', module: '\u{1F4C4} 模块', class: '\u{1F3F7}\uFE0F 类',
+        function: '\u26A1 函数', method: '\u{1F527} 方法', variable: '\u{1F4CC} 变量',
+        external: '\u{1F517} 外部库',
+    };
+    html += `<div class="detail-row">
+        <div class="detail-label">类型</div>
+        <div class="detail-value">${typeNames[node.group] || node.group}</div>
+    </div>`;
+    html += `<div class="detail-row">
+        <div class="detail-label">标识</div>
+        <div class="detail-value"><code>${node.id}</code></div>
+    </div>`;
+
+    if (node.title) {
+        const lines = node.title.split('\n');
+        lines.forEach(line => {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+                const label = line.substring(0, colonIdx).trim();
+                const value = line.substring(colonIdx + 1).trim();
+                if (label.startsWith('\u3010') || label === '类型' || !value) return;
+                html += `<div class="detail-row">
+                    <div class="detail-label">${label}</div>
+                    <div class="detail-value">${value}</div>
+                </div>`;
+            }
+        });
+    }
+
+    const allE = edgesDataSet.get();
+    const relatedEdges = allE.filter(e => e.from === nodeId || e.to === nodeId);
+    if (relatedEdges.length > 0) {
+        html += `<div class="detail-row">
+            <div class="detail-label">关联关系 (${relatedEdges.length})</div>
+            <div class="detail-value relation-list">`;
+        relatedEdges.forEach(e => {
+            const direction = e.from === nodeId ? '\u2192' : '\u2190';
+            const otherId = e.from === nodeId ? e.to : e.from;
+            const otherNode = nodesDataSet.get(otherId);
+            const otherLabel = otherNode ? (otherNode.label || otherId) : otherId;
+            html += `<div class="relation-item" data-target-node="${encodeURIComponent(otherId)}" 
+                          title="点击定位到该节点">
+                <span class="relation-direction">${direction}</span>
+                <span class="relation-type">${e.label}</span>
+                <span class="relation-target">${otherLabel}</span>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    detailContent.innerHTML = html;
+    detailPanel.style.display = 'block';
+
+    detailContent.querySelectorAll('.relation-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const targetNodeId = decodeURIComponent(item.getAttribute('data-target-node'));
+            focusAndHighlightNode(targetNodeId);
+        });
+    });
+}
+
+/**
+ * 显示统计信息
+ */
+function showStats(metadata) {
+    statsPanel.style.display = 'block';
+
+    let html = '';
+    html += `<div class="stat-row"><span>项目名称</span><span class="stat-value">${metadata.project_name}</span></div>`;
+    html += `<div class="stat-row"><span>Python 文件</span><span class="stat-value">${metadata.python_files}</span></div>`;
+    html += `<div class="stat-row"><span>节点总数</span><span class="stat-value">${metadata.total_nodes}</span></div>`;
+    html += `<div class="stat-row"><span>关系总数</span><span class="stat-value">${metadata.total_edges}</span></div>`;
+
+    if (metadata.node_type_counts) {
+        html += '<hr style="border-color:var(--border);margin:8px 0">';
+        const typeLabels = {
+            package: '\u{1F4E6} 包', module: '\u{1F4C4} 模块', class: '\u{1F3F7}\uFE0F 类',
+            function: '\u26A1 函数', method: '\u{1F527} 方法', variable: '\u{1F4CC} 变量',
+            external: '\u{1F517} 外部库',
+        };
+        for (const [type, count] of Object.entries(metadata.node_type_counts)) {
+            html += `<div class="stat-row"><span>${typeLabels[type] || type}</span><span class="stat-value">${count}</span></div>`;
+        }
+    }
+
+    statsContent.innerHTML = html;
+}
+
+/**
+ * 导出图片
+ */
+function handleExport() {
+    if (!network) {
+        showToast('请先解析项目', 'error');
+        return;
+    }
+
+    const canvas = graphContainer.querySelector('canvas');
+    if (canvas) {
+        const link = document.createElement('a');
+        link.download = `codegraph_${Date.now()}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        showToast('图片已导出', 'success');
+    }
+}
+
+// ============ 目录浏览功能 ============
+
+async function openBrowseModal(path = '') {
+    browseModal.style.display = 'flex';
+    await loadDirectory(path);
+}
+
+async function loadDirectory(path) {
+    try {
+        const url = path ? `/api/browse?path=${encodeURIComponent(path)}` : '/api/browse';
+        const response = await fetch(url);
+        const data = await response.json();
+
+        browsePath = data.current || '';
+        browseParent = data.parent || '';
+        currentPathSpan.textContent = browsePath || '根目录';
+
+        dirList.innerHTML = '';
+        if (data.items.length === 0) {
+            dirList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary)">没有子文件夹</div>';
+            return;
+        }
+
+        data.items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'dir-item';
+            div.innerHTML = `\u{1F4C1} ${item.name}`;
+            div.addEventListener('click', () => {
+                dirList.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+                div.classList.add('selected');
+                browsePath = item.path;
+            });
+            div.addEventListener('dblclick', () => {
+                loadDirectory(item.path);
+            });
+            dirList.appendChild(div);
+        });
+    } catch (error) {
+        showToast(`浏览目录失败: ${error.message}`, 'error');
+    }
+}
+
+function handleParentDir() {
+    loadDirectory(browseParent);
+}
+
+function handleSelectDir() {
+    if (browsePath) {
+        projectPathInput.value = browsePath;
+        browseModal.style.display = 'none';
+        showToast(`已选择: ${browsePath}`, 'info');
+    } else {
+        showToast('请选择一个文件夹', 'error');
+    }
+}
+
+// ============ 工具函数 ============
+
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// ============ 外部库分组背景绘制 ============
+
+function drawExternalPackageHulls(ctx) {
+    if (!network || !nodesDataSet) return;
+
+    const groups = {};
+    const allN = nodesDataSet.get();
+    allN.forEach(node => {
+        if (node.group === 'external' && node.externalPackage) {
+            if (!groups[node.externalPackage]) groups[node.externalPackage] = [];
+            groups[node.externalPackage].push(node.id);
+        }
+    });
+
+    const positions = network.getPositions();
+    const hullColors = [
+        { fill: 'rgba(255, 159, 67, 0.07)', stroke: 'rgba(255, 159, 67, 0.30)', text: 'rgba(255, 159, 67, 0.55)' },
+        { fill: 'rgba(46, 213, 115, 0.07)', stroke: 'rgba(46, 213, 115, 0.30)', text: 'rgba(46, 213, 115, 0.55)' },
+        { fill: 'rgba(116, 185, 255, 0.07)', stroke: 'rgba(116, 185, 255, 0.30)', text: 'rgba(116, 185, 255, 0.55)' },
+        { fill: 'rgba(162, 155, 254, 0.07)', stroke: 'rgba(162, 155, 254, 0.30)', text: 'rgba(162, 155, 254, 0.55)' },
+        { fill: 'rgba(255, 107, 129, 0.07)', stroke: 'rgba(255, 107, 129, 0.30)', text: 'rgba(255, 107, 129, 0.55)' },
+    ];
+
+    let colorIdx = 0;
+    Object.entries(groups).forEach(([pkg, nodeIds]) => {
+        const points = nodeIds.map(id => positions[id]).filter(Boolean);
+        if (points.length === 0) return;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        points.forEach(p => {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+        });
+
+        const style = hullColors[colorIdx % hullColors.length];
+        colorIdx++;
+
+        const padding = points.length <= 2 ? 22 : 45;
+        const x = minX - padding;
+        const y = minY - padding - 18;
+        const minW = points.length === 1 ? 60 : 100;
+        const minH = points.length === 1 ? 45 : 60;
+        const w = Math.max(maxX - minX + padding * 2, minW);
+        const h = Math.max(maxY - minY + padding * 2 + 18, minH);
+        const r = 12;
+
+        ctx.save();
+        ctx.fillStyle = style.fill;
+        ctx.strokeStyle = style.stroke;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+
+        drawRoundedRect(ctx, x, y, w, h, r);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.setLineDash([]);
+        ctx.fillStyle = style.text;
+        ctx.font = 'bold 13px Segoe UI, Microsoft YaHei, sans-serif';
+        ctx.fillText(`\u{1F4E6} ${pkg}`, x + 10, y + 15);
+        ctx.restore();
+    });
+}
+
+// ============ 引脚连线绘制 ============
+
+/**
+ * 绘制引脚级别的自定义边（UE5 蓝图风格贝塞尔曲线）
+ * 在 afterDrawing 回调中调用，使连线精准连接到引脚位置
+ */
+function drawPinEdges(ctx) {
+    if (!edgesDataSet) return;
+
+    const allE = edgesDataSet.get();
+    const positions = network.getPositions();
+
+    allE.forEach(edge => {
+        if (!edge._isPinEdge) return;
+
+        const state = edge._drawState || 'normal';
+        if (state === 'dim') return;
+
+        // 起点：优先从引脚右侧圆点出发
+        let sx, sy;
+        if (edge._fromPin && pinPositionCache[edge.from]) {
+            const pp = pinPositionCache[edge.from][edge._fromPin];
+            if (pp) { sx = pp.rightX; sy = pp.y; }
+        }
+        if (sx === undefined) {
+            const p = positions[edge.from];
+            if (!p) return;
+            sx = p.x; sy = p.y;
+        }
+
+        // 终点：优先到引脚左侧圆点
+        let ex, ey;
+        if (edge._toPin && pinPositionCache[edge.to]) {
+            const pp = pinPositionCache[edge.to][edge._toPin];
+            if (pp) { ex = pp.leftX; ey = pp.y; }
+        }
+        if (ex === undefined) {
+            const p = positions[edge.to];
+            if (!p) return;
+            ex = p.x; ey = p.y;
+        }
+
+        // 颜色与线宽
+        const edgeColor = (typeof edge._originalColor === 'object')
+            ? edge._originalColor.color : (edge._originalColor || '#999');
+        const baseWidth = edge._originalWidth || 1.5;
+        const lineWidth = state === 'highlight' ? baseWidth + 3 : baseWidth;
+
+        ctx.save();
+        ctx.strokeStyle = edgeColor;
+        ctx.lineWidth = lineWidth;
+        ctx.globalAlpha = state === 'highlight' ? 1.0 : 0.75;
+
+        if (state === 'highlight') {
+            ctx.shadowColor = edgeColor;
+            ctx.shadowBlur = 10;
+        }
+
+        // UE5 风格贝塞尔曲线：从右侧水平出发，到左侧水平进入
+        const dx = Math.max(Math.abs(ex - sx) * 0.4, 40);
+        const cp1x = sx + dx, cp1y = sy;
+        const cp2x = ex - dx, cp2y = ey;
+
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+        ctx.stroke();
+
+        // 箭头
+        ctx.shadowBlur = 0;
+        const arrowSize = 7;
+        const t = 0.96;
+        const mt = 1 - t;
+        const bx = mt*mt*mt*sx + 3*mt*mt*t*cp1x + 3*mt*t*t*cp2x + t*t*t*ex;
+        const by = mt*mt*mt*sy + 3*mt*mt*t*cp1y + 3*mt*t*t*cp2y + t*t*t*ey;
+        const angle = Math.atan2(ey - by, ex - bx);
+
+        ctx.fillStyle = edgeColor;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - arrowSize * Math.cos(angle - Math.PI / 7),
+                   ey - arrowSize * Math.sin(angle - Math.PI / 7));
+        ctx.lineTo(ex - arrowSize * Math.cos(angle + Math.PI / 7),
+                   ey - arrowSize * Math.sin(angle + Math.PI / 7));
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+    });
+}
+
+// ============ 搜索功能 ============
+
+function handleSearch() {
+    const query = searchInput.value.trim().toLowerCase();
+
+    if (!query || !nodesDataSet) {
+        searchCount.textContent = '';
+        clearHighlight();
+        return;
+    }
+
+    const allN = nodesDataSet.get();
+    const matchIds = new Set();
+
+    allN.forEach(node => {
+        const label = (node.label || '').toLowerCase();
+        const id = (node.id || '').toLowerCase();
+        if (label.includes(query) || id.includes(query)) {
+            matchIds.add(node.id);
+        }
+        // 蓝图模式下搜索引脚
+        if (node._bpData) {
+            node._bpData.pins.forEach(pin => {
+                const pinLabel = (pin.label || '').toLowerCase();
+                const pinId = (pin.id || '').toLowerCase();
+                if (pinLabel.includes(query) || pinId.includes(query)) {
+                    matchIds.add(node.id);
+                }
+            });
+        }
+    });
+
+    searchCount.textContent = matchIds.size > 0 ? `找到 ${matchIds.size} 个` : '无匹配';
+
+    if (matchIds.size === 0) {
+        clearHighlight();
+        return;
+    }
+
+    const updatedNodes = allN.map(node => {
+        if (matchIds.has(node.id)) {
+            return {
+                id: node.id,
+                color: node._bpData ? node._originalColor : { background: '#FFD700', border: '#FFA500' },
+                opacity: 1,
+                borderWidth: 4,
+                font: { color: '#ffffff', size: 15, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+                shadow: { enabled: true, color: 'rgba(255, 215, 0, 0.6)', size: 15 },
+            };
+        } else {
+            return {
+                id: node.id,
+                color: node._bpData ? node._originalColor : { background: '#3a3b5c', border: '#2d2e52' },
+                opacity: 0.15,
+                borderWidth: 1,
+                font: { color: 'rgba(160,160,192,0.25)', size: 9, face: 'Segoe UI, Microsoft YaHei, sans-serif' },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    const allE = edgesDataSet.get();
+    const updatedEdges = allE.map(edge => {
+        if (edge._isPinEdge) {
+            return {
+                id: edge.id,
+                _drawState: (matchIds.has(edge.from) || matchIds.has(edge.to)) ? 'highlight' : 'dim',
+                color: { color: 'rgba(0,0,0,0)', opacity: 0 },
+                width: 0,
+                font: { size: 0 },
+            };
+        }
+        if (matchIds.has(edge.from) || matchIds.has(edge.to)) {
+            return {
+                id: edge.id,
+                color: edge._originalColor,
+                width: edge._originalWidth || 1,
+                font: { size: 9, color: '#808090', strokeWidth: 0, align: 'middle' },
+                shadow: { enabled: false },
+            };
+        } else {
+            return {
+                id: edge.id,
+                color: { color: 'rgba(50,50,70,0.08)', highlight: 'rgba(50,50,70,0.08)', opacity: 0.05 },
+                width: 0.3,
+                font: { size: 0 },
+                shadow: { enabled: false },
+            };
+        }
+    });
+
+    nodesDataSet.update(updatedNodes);
+    edgesDataSet.update(updatedEdges);
+
+    highlightedNodeId = 'search';
+
+    if (matchIds.size > 0 && matchIds.size <= 20) {
+        network.fit({ nodes: Array.from(matchIds), animation: true });
+    }
+}

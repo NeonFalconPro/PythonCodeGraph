@@ -26,6 +26,7 @@ class EdgeType(str, Enum):
     CALLS = "calls"                 # 调用关系
     DECORATES = "decorates"         # 装饰器关系
     INSTANTIATES = "instantiates"   # 实例化关系
+    USES = "uses"                   # 实际使用关系（调用导入项）
 
 
 class NodeData(BaseModel):
@@ -75,6 +76,7 @@ class GraphData(BaseModel):
             EdgeType.CALLS: {"color": "#2ECC71", "dashes": False, "width": 1},
             EdgeType.DECORATES: {"color": "#9B59B6", "dashes": True, "width": 2},
             EdgeType.INSTANTIATES: {"color": "#F39C12", "dashes": False, "width": 1},
+            EdgeType.USES: {"color": "#00CEC9", "dashes": False, "width": 1.5},
         }
 
         # 节点类型对应的 emoji 图标

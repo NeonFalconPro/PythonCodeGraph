@@ -23,6 +23,7 @@ class PythonASTParser:
         self._edge_keys: set = set()  # (source, target, edge_type) 快速去重
         self._class_name_index: Dict[str, str] = {}  # 类名 -> 节点ID 索引
         self._func_name_index: Dict[str, str] = {}   # 函数名 -> 节点ID 索引
+        self._current_import_map: Dict[str, str] = {}  # 每个文件的导入别名 -> 外部节点ID
 
     def parse_project(self):
         """解析整个项目"""
@@ -101,6 +102,9 @@ class PythonASTParser:
         module_name = self._path_to_module(rel_path)
         module_id = f"module:{module_name}"
 
+        # 重置每个文件的导入别名映射
+        self._current_import_map = {}
+
         # 添加模块节点
         self._add_node(NodeData(
             id=module_id,
@@ -127,6 +131,9 @@ class PythonASTParser:
 
         # 解析函数调用关系（深层遍历）
         self._parse_calls(tree, module_id, module_name, str(rel_path))
+
+        # 解析导入内容的实际使用情况
+        self._parse_import_usage(tree, module_id)
 
     def _add_package_hierarchy(self, module_name: str, module_id: str):
         """添加包的层级结构"""
@@ -301,6 +308,7 @@ class PythonASTParser:
                 else:
                     # 外部库导入
                     self._add_external_import_chain(module_id, alias.name, [])
+                    self._current_import_map[alias.asname or alias.name] = f"external:{alias.name}"
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 # 处理相对导入
@@ -340,6 +348,10 @@ class PythonASTParser:
                     # 外部库导入
                     names = [alias.name for alias in node.names if alias.name != '*']
                     self._add_external_import_chain(module_id, import_module, names)
+                    # 记录导入别名映射
+                    for alias in node.names:
+                        if alias.name != '*':
+                            self._current_import_map[alias.asname or alias.name] = f"external:{import_module}.{alias.name}"
 
     def _add_external_import_chain(self, module_id: str, import_module: str, imported_names: List[str]):
         """创建外部库导入链节点"""
@@ -449,6 +461,63 @@ class PythonASTParser:
                         edge_type=edge_type,
                         label=label,
                     ))
+
+    def _parse_import_usage(self, tree: ast.AST, module_id: str):
+        """解析导入内容的实际使用情况：追踪哪些导入的函数/类被实际调用"""
+        if not self._current_import_map:
+            return
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = self._get_call_name(node)
+            if not call_name:
+                continue
+
+            parts = call_name.split('.')
+            root = parts[0]
+            if root not in self._current_import_map:
+                continue
+
+            root_ext_id = self._current_import_map[root]
+            root_pkg = root_ext_id.split(':')[1].split('.')[0]
+
+            if len(parts) == 1:
+                # 直接调用导入项：FastAPI(), Path() 等
+                self._add_edge(EdgeData(
+                    source=module_id,
+                    target=root_ext_id,
+                    edge_type=EdgeType.USES,
+                    label="使用",
+                ))
+            else:
+                # 链式调用：os.path.join(), ast.parse() 等
+                base_parts = root_ext_id.split(':')[1].split('.')
+                prev_id = root_ext_id
+                for i in range(1, len(parts)):
+                    full_parts = base_parts + parts[1:i + 1]
+                    full_path = '.'.join(full_parts)
+                    ext_id = f"external:{full_path}"
+                    self._add_node(NodeData(
+                        id=ext_id,
+                        label=parts[i],
+                        node_type=NodeType.EXTERNAL,
+                        details={"external_package": root_pkg},
+                    ))
+                    self._add_edge(EdgeData(
+                        source=prev_id,
+                        target=ext_id,
+                        edge_type=EdgeType.CONTAINS,
+                        label="包含",
+                    ))
+                    prev_id = ext_id
+
+                self._add_edge(EdgeData(
+                    source=module_id,
+                    target=prev_id,
+                    edge_type=EdgeType.USES,
+                    label="使用",
+                ))
 
     # ============ 辅助方法 ============
 

@@ -66,6 +66,11 @@ projectPathInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') handleAnalyze();
 });
 
+// 防止 vis-network 捕获输入框中的键盘事件（下划线_等符号会被当作缩放快捷键拦截）
+document.querySelectorAll('input[type="text"], select').forEach(el => {
+    el.addEventListener('keydown', (e) => e.stopPropagation());
+});
+
 // ============ 核心功能 ============
 
 /**
@@ -206,6 +211,36 @@ function highlightNeighborhood(nodeId) {
             connectedEdgeIds.add(edge.id);
         }
     });
+
+    // 扩展外部库链：选中节点关联的外部节点同时高亮其完整包含链路
+    const nodeMap = new Map(allN.map(n => [n.id, n]));
+    const containsAdj = new Map();
+    allE.forEach(edge => {
+        if (edge.label && (edge.label.includes('包含') || edge.label.includes('定义'))) {
+            if (!containsAdj.has(edge.from)) containsAdj.set(edge.from, []);
+            containsAdj.get(edge.from).push({ neighbor: edge.to, edgeId: edge.id });
+            if (!containsAdj.has(edge.to)) containsAdj.set(edge.to, []);
+            containsAdj.get(edge.to).push({ neighbor: edge.from, edgeId: edge.id });
+        }
+    });
+    const expandQueue = [];
+    connectedNodeIds.forEach(id => {
+        const node = nodeMap.get(id);
+        if (node && node.group === 'external') expandQueue.push(id);
+    });
+    while (expandQueue.length > 0) {
+        const cur = expandQueue.shift();
+        (containsAdj.get(cur) || []).forEach(({ neighbor, edgeId }) => {
+            if (!connectedNodeIds.has(neighbor)) {
+                const n = nodeMap.get(neighbor);
+                if (n && n.group === 'external') {
+                    connectedNodeIds.add(neighbor);
+                    connectedEdgeIds.add(edgeId);
+                    expandQueue.push(neighbor);
+                }
+            }
+        });
+    }
 
     // 更新节点样式
     const updatedNodes = allN.map(node => {
@@ -429,7 +464,8 @@ function applyFilters() {
             (t === 'contains' && (e.label.includes('包含') || e.label.includes('定义'))) ||
             (t === 'calls' && e.label.includes('调用')) ||
             (t === 'decorates' && e.label.includes('装饰')) ||
-            (t === 'instantiates' && e.label.includes('实例化'))
+            (t === 'instantiates' && e.label.includes('实例化')) ||
+            (t === 'uses' && e.label.includes('使用'))
         ))
     );
 

@@ -1,4 +1,4 @@
-# 🔍 CodeGraph
+# 🔍 PythonCodeGraph
 
 **Python 代码知识图谱生成与可视化工具** — 自动解析 Python 项目的模块、类、函数之间的关系，生成可交互的知识图谱。
 

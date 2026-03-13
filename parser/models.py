@@ -158,11 +158,17 @@ class GraphData(BaseModel):
 
         # 1. 建立 item → 所属项目模块 映射
         item_to_module: dict[str, str] = {}
+        method_owner_class: dict[str, str] = {}
         for edge in self.edges:
             if edge.edge_type == EdgeType.CONTAINS:
                 src = node_map.get(edge.source)
+                tgt = node_map.get(edge.target)
                 if src and src.node_type == NodeType.MODULE:
                     item_to_module[edge.target] = edge.source
+                if (src and tgt
+                        and src.node_type == NodeType.CLASS
+                        and tgt.node_type == NodeType.METHOD):
+                    method_owner_class[tgt.id] = src.label
         # 方法通过类传递归属模块
         for edge in self.edges:
             if edge.edge_type == EdgeType.CONTAINS:
@@ -321,15 +327,16 @@ class GraphData(BaseModel):
                             "docstring": tgt.docstring,
                         })
                         output_ids.add(key)
-            # 类的方法归属到模块输出（仅显示方法名）
+            # 类的方法归属到模块输出（显示为 类名.方法）
             if src.node_type == NodeType.CLASS and tgt.node_type == NodeType.METHOD:
                 mod_id = item_to_module.get(edge.source)
                 if mod_id and mod_id in bp_modules:
                     key = (mod_id, tgt.id)
                     if key not in output_ids:
+                        qualified_label = f"{src.label}.{tgt.label}"
                         bp_modules[mod_id]["outputs"].append({
                             "id": tgt.id,
-                            "label": tgt.label,
+                            "label": qualified_label,
                             "node_type": tgt.node_type.value,
                             "docstring": tgt.docstring,
                         })
@@ -422,9 +429,12 @@ class GraphData(BaseModel):
             # 添加输入引脚（去重）
             in_key = (src_mod, item_id)
             if in_key not in input_ids:
+                tgt_label = tgt.label
+                if tgt.node_type == NodeType.METHOD and tgt.id in method_owner_class:
+                    tgt_label = f"{method_owner_class[tgt.id]}.{tgt.label}"
                 bp_modules[src_mod]["inputs"].append({
                     "id": item_id,
-                    "label": tgt.label,
+                    "label": tgt_label,
                     "node_type": tgt.node_type.value,
                     "edge_type": edge_type.value,
                     "docstring": tgt.docstring,

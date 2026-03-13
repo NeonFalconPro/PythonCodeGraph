@@ -95,6 +95,35 @@
     letter-spacing: 0.3px;
 }
 
+.bp-type-chip.type-class {
+    background: #f1c40f;
+    color: #1d1f2f;
+}
+
+.bp-type-chip.type-method {
+    background: #3498db;
+}
+
+.bp-type-chip.type-function {
+    background: #2ecc71;
+}
+
+.bp-type-chip.type-constant {
+    background: #9b59b6;
+}
+
+.bp-type-chip.type-module {
+    background: #1abc9c;
+}
+
+.bp-type-chip.type-package {
+    background: #e74c3c;
+}
+
+.bp-type-chip.type-external {
+    background: #e67e22;
+}
+
 .bp-item-tag.interactive {
     cursor: pointer;
 }

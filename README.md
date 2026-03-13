@@ -13,6 +13,16 @@ It provides two UI modes:
 - Standard mode (`/standard`): force-directed and hierarchical graph based on vis-network
 - Blueprint mode (`/blueprint`): module-level input/output blueprint graph based on LiteGraph.js
 
+## Demo GIFs
+
+### Standard Mode
+
+![Standard mode demo](documents/standard.gif)
+
+### Blueprint Mode
+
+![Blueprint mode demo](documents/blueprint.gif)
+
 ## Current Capabilities
 
 - Project-wide Python file scanning with ignore rules for common cache/build/venv folders

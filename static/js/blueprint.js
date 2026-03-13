@@ -29,7 +29,21 @@ const TYPE_ABBR = {
     external: 'EXT',
 };
 
-const SLOT_LABEL_MAX_CHARS = 18;
+const TYPE_PREFIX = {
+    package:  '[PKG]🟥',
+    module:   '[MOD]🟩',
+    class:    '[CLS]🟨',
+    function: '[FUN]🟩',
+    method:   '[FUN]🟦',
+    constant: '[CST]🟪',
+    external: '[EXT]🟧',
+};
+
+const SLOT_LABEL_MAX_CHARS = 42;
+const NODE_MIN_WIDTH = 290;
+const NODE_MAX_WIDTH = 860;
+const NODE_SIDE_PADDING = 20;
+const NODE_CENTER_GAP = 30;
 
 const EDGE_TYPE_CONFIG = {
     imports:      { color: "#E74C3C", label: "导入" },
@@ -70,10 +84,24 @@ function getTypeAbbr(type) {
     return TYPE_ABBR[type] || 'N/A';
 }
 
+function getTypePrefix(type) {
+    return TYPE_PREFIX[type] || '⬜N/A';
+}
+
 function truncateSlotLabel(label) {
     const text = String(label || '');
     if (text.length <= SLOT_LABEL_MAX_CHARS) return text;
     return `${text.slice(0, SLOT_LABEL_MAX_CHARS - 1)}…`;
+}
+
+function estimateTextWidth(text) {
+    let w = 0;
+    const s = String(text || '');
+    for (let i = 0; i < s.length; i++) {
+        const code = s.charCodeAt(i);
+        w += code <= 0x00ff ? 6 : 10;
+    }
+    return w;
 }
 
 // ============ DOM 元素 ============
@@ -461,11 +489,15 @@ function buildBlueprintGraph(data) {
 
         slotMap[mod.id] = { outputMap: {}, inputMap: {} };
 
+        const inputDisplayLabels = [];
+        const outputDisplayLabels = [];
+
         // 添加输入引脚（左侧 - 引入项）
         mod.inputs.forEach(inp => {
             const shortLabel = truncateSlotLabel(inp.label);
+            const displayLabel = `${getTypePrefix(inp.node_type)} ${shortLabel}`;
             const slotIdx = (node.inputs || []).length;
-            node.addInput(`[${getTypeAbbr(inp.node_type)}] ${shortLabel}`, "*");
+            node.addInput(displayLabel, "*");
             if (node.inputs && node.inputs[slotIdx]) {
                 node.inputs[slotIdx].color_on = SLOT_COLORS[inp.node_type] || "#aaa";
                 node.inputs[slotIdx]._itemId = inp.id;
@@ -473,13 +505,15 @@ function buildBlueprintGraph(data) {
                 node.inputs[slotIdx]._docstring = inp.docstring || '';
             }
             slotMap[mod.id].inputMap[inp.id] = slotIdx;
+            inputDisplayLabels.push(displayLabel);
         });
 
         // 添加输出引脚（右侧 - 定义项）
         mod.outputs.forEach(out => {
             const shortLabel = truncateSlotLabel(out.label);
+            const displayLabel = `${shortLabel} ${getTypePrefix(out.node_type)}`;
             const slotIdx = (node.outputs || []).length;
-            node.addOutput(`[${getTypeAbbr(out.node_type)}] ${shortLabel}`, "*");
+            node.addOutput(displayLabel, "*");
             if (node.outputs && node.outputs[slotIdx]) {
                 node.outputs[slotIdx].color_on = SLOT_COLORS[out.node_type] || "#aaa";
                 node.outputs[slotIdx]._itemId = out.id;
@@ -487,11 +521,26 @@ function buildBlueprintGraph(data) {
                 node.outputs[slotIdx]._docstring = out.docstring || '';
             }
             slotMap[mod.id].outputMap[out.id] = slotIdx;
+            outputDisplayLabels.push(displayLabel);
         });
 
-        // 节点尺寸
+        // 节点尺寸：根据左右引脚最大文本长度动态计算宽度，减少遮挡
+        const maxInputW = inputDisplayLabels.length
+            ? Math.max(...inputDisplayLabels.map(estimateTextWidth))
+            : 64;
+        const maxOutputW = outputDisplayLabels.length
+            ? Math.max(...outputDisplayLabels.map(estimateTextWidth))
+            : 64;
+        const titleW = estimateTextWidth(node.title);
+        const dynamicWidth = Math.max(
+            NODE_MIN_WIDTH,
+            maxInputW + maxOutputW + NODE_SIDE_PADDING * 2 + NODE_CENTER_GAP,
+            titleW + 38,
+        );
+        const clampedWidth = Math.min(NODE_MAX_WIDTH, dynamicWidth);
+
         const maxSlots = Math.max(mod.inputs.length, mod.outputs.length, 1);
-        node.size = [280, maxSlots * 22 + 50];
+        node.size = [clampedWidth, maxSlots * 22 + 50];
 
         graph.add(node);
         lgNodeMap[mod.id] = node;
@@ -754,7 +803,7 @@ function performAutoLayout() {
     }
     projects.forEach(n => getDepth(n.properties.module_id));
 
-    const xSpacing = 400; // 同层节点间距
+    const columnGap = 140; // 层间距（按每层最大节点宽度自适应）
     const yPadding = 80; // 层间距
 
     // 外部包列（最左）
@@ -774,13 +823,29 @@ function performAutoLayout() {
     });
 
     const maxLayer = Math.max(0, ...Object.keys(layerGroups).map(Number));
-    const startX = externals.length > 0 ? 80 + xSpacing : 80;
+    const maxExternalWidth = externals.length > 0
+        ? Math.max(...externals.map(n => n.size[0] || NODE_MIN_WIDTH))
+        : 0;
+    const layerMaxWidth = {};
+    for (let layer = 0; layer <= maxLayer; layer++) {
+        const nodes = layerGroups[layer] || [];
+        layerMaxWidth[layer] = nodes.length > 0
+            ? Math.max(...nodes.map(n => n.size[0] || NODE_MIN_WIDTH))
+            : NODE_MIN_WIDTH;
+    }
+
+    let xCursor = externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80;
+    const layerX = {};
+    for (let layer = 0; layer <= maxLayer; layer++) {
+        layerX[layer] = xCursor;
+        xCursor += layerMaxWidth[layer] + columnGap;
+    }
 
     for (let layer = 0; layer <= maxLayer; layer++) {
         const nodes = layerGroups[layer] || [];
         let ly = 100;
         nodes.forEach(n => {
-            n.pos[0] = startX + layer * xSpacing;
+            n.pos[0] = layerX[layer];
             n.pos[1] = ly;
             ly += n.size[1] + yPadding;
         });
@@ -965,7 +1030,7 @@ function showNodeDetail(node) {
             <div class="detail-value"><div class="bp-item-list">`;
         mod.outputs.forEach(out => {
             const abbr = getTypeAbbr(out.node_type);
-            html += `<div class="bp-item-tag output-tag interactive" data-item-id="${encodeURIComponent(out.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="output" data-doc="${encodeURIComponent(normalizeDocstring(out.docstring))}"><span class="bp-type-chip">${abbr}</span>${out.label}</div>`;
+            html += `<div class="bp-item-tag output-tag interactive" data-item-id="${encodeURIComponent(out.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="output" data-doc="${encodeURIComponent(normalizeDocstring(out.docstring))}"><span class="bp-type-chip type-${out.node_type}">${abbr}</span>${out.label}</div>`;
         });
         html += `</div></div></div>`;
     }
@@ -978,7 +1043,7 @@ function showNodeDetail(node) {
         mod.inputs.forEach(inp => {
             const abbr = getTypeAbbr(inp.node_type);
             const edgeCfg = EDGE_TYPE_CONFIG[inp.edge_type] || {};
-            html += `<div class="bp-item-tag input-tag interactive" data-item-id="${encodeURIComponent(inp.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="input" data-doc="${encodeURIComponent(normalizeDocstring(inp.docstring))}"><span class="bp-type-chip">${abbr}</span>${inp.label}
+            html += `<div class="bp-item-tag input-tag interactive" data-item-id="${encodeURIComponent(inp.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="input" data-doc="${encodeURIComponent(normalizeDocstring(inp.docstring))}"><span class="bp-type-chip type-${inp.node_type}">${abbr}</span>${inp.label}
                 <span class="edge-badge" style="background:${edgeCfg.color || '#666'}">${edgeCfg.label || inp.edge_type}</span>
             </div>`;
         });

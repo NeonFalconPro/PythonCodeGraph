@@ -236,8 +236,17 @@ class GraphData(BaseModel):
         cross_refs = [(k[0], v[0], k[1], v[1]) for k, v in deduped.items()]
 
         # 4. 确定需要的外部蓝图节点（被引用的 + 祖先链）
+        # 对 uses 链式调用（如 os.path.exists）做扁平化：仅保留 root 外部节点（os）
         needed_ext_bps: set[str] = set()
-        for _, tgt_bp, _, _ in cross_refs:
+        for _, tgt_bp, item_id, edge_type in cross_refs:
+            if edge_type == EdgeType.USES and item_id.startswith("external:"):
+                ext_path = item_id.split(":", 1)[1]
+                parts = ext_path.split('.')
+                if len(parts) >= 3:
+                    root_bp = f"external:{parts[0]}"
+                    if root_bp in ext_bp_set:
+                        needed_ext_bps.add(root_bp)
+                    continue
             if tgt_bp in ext_bp_set:
                 needed_ext_bps.add(tgt_bp)
                 p = ext_parent.get(tgt_bp)
@@ -354,11 +363,57 @@ class GraphData(BaseModel):
         # 9. 处理项目模块的输入引脚和跨模块链接
         input_ids: set = set()
         for src_mod, tgt_bp, item_id, edge_type in cross_refs:
-            if src_mod not in bp_modules or tgt_bp not in bp_modules:
+            if src_mod not in bp_modules:
                 continue
             tgt = node_map.get(item_id)
             if not tgt:
                 continue
+
+            # uses 链式调用扁平化：
+            # os.path.exists() -> 外部节点 os 的输出引脚 path，项目模块输入引脚 exists
+            if edge_type == EdgeType.USES and item_id.startswith("external:"):
+                ext_path = item_id.split(":", 1)[1]
+                parts = ext_path.split('.')
+                if len(parts) >= 3:
+                    root_bp = f"external:{parts[0]}"
+                    src_slot_name = parts[1]
+                    tgt_slot_name = parts[-1]
+                    if root_bp in bp_modules:
+                        existing_src_item_id = f"external:{parts[0]}.{src_slot_name}"
+                        src_item_id = existing_src_item_id
+                        tgt_item_id = f"external_use:{ext_path}"
+
+                        out_key = (root_bp, src_item_id)
+                        if out_key not in output_ids:
+                            bp_modules[root_bp]["outputs"].append({
+                                "id": src_item_id,
+                                "label": src_slot_name,
+                                "node_type": "external",
+                            })
+                            output_ids.add(out_key)
+
+                        in_key = (src_mod, tgt_item_id)
+                        if in_key not in input_ids:
+                            bp_modules[src_mod]["inputs"].append({
+                                "id": tgt_item_id,
+                                "label": tgt_slot_name,
+                                "node_type": "external",
+                                "edge_type": edge_type.value,
+                            })
+                            input_ids.add(in_key)
+
+                        links.append({
+                            "src_module": root_bp,
+                            "tgt_module": src_mod,
+                            "src_item_id": src_item_id,
+                            "tgt_item_id": tgt_item_id,
+                            "edge_type": edge_type.value,
+                        })
+                        continue
+
+            if tgt_bp not in bp_modules:
+                continue
+
             # 添加输入引脚（去重）
             in_key = (src_mod, item_id)
             if in_key not in input_ids:

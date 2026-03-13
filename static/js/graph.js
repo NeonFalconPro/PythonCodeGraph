@@ -14,6 +14,13 @@ let browsePath = '';        // 当前浏览路径
 let browseParent = '';      // 上级目录路径（来自API）
 let highlightedNodeId = null; // 当前高亮的节点
 
+function t(key, vars) {
+    if (window.CodeGraphI18n && typeof window.CodeGraphI18n.t === 'function') {
+        return window.CodeGraphI18n.t(key, vars);
+    }
+    return key;
+}
+
 // ============ DOM 元素 ============
 const projectPathInput = document.getElementById('projectPath');
 const analyzeBtn = document.getElementById('analyzeBtn');
@@ -79,7 +86,7 @@ document.querySelectorAll('input[type="text"], select').forEach(el => {
 async function handleAnalyze() {
     const path = projectPathInput.value.trim();
     if (!path) {
-        showToast('请输入项目路径', 'error');
+        showToast(t('common.toast_input_path'), 'error');
         return;
     }
 
@@ -106,10 +113,13 @@ async function handleAnalyze() {
 
             renderGraph(allNodes, allEdges);
             showStats(currentMetadata);
-            showToast(`解析完成: ${currentMetadata.total_nodes} 个节点, ${currentMetadata.total_edges} 条关系`, 'success');
+            showToast(t('common.toast_parse_done', {
+                nodes: currentMetadata.total_nodes,
+                edges: currentMetadata.total_edges,
+            }), 'success');
         }
     } catch (error) {
-        showToast(`错误: ${error.message}`, 'error');
+        showToast(t('common.toast_error_prefix', { message: error.message }), 'error');
     } finally {
         loading.style.display = 'none';
         analyzeBtn.disabled = false;
@@ -497,18 +507,18 @@ function showNodeDetail(nodeId) {
 
     // 类型
     const typeNames = {
-        package: '📦 包', module: '📄 模块', class: '🏷️ 类',
-        function: '⚡ 函数', method: '🔧 方法', constant: '📌 常量',
-        external: '🔗 外部库',
+        package: t('common.node_package'), module: t('common.node_module'), class: t('common.node_class'),
+        function: t('common.node_function'), method: t('common.node_method'), constant: t('common.node_constant'),
+        external: t('common.node_external'),
     };
     html += `<div class="detail-row">
-        <div class="detail-label">类型</div>
+        <div class="detail-label">${t('common.type_label')}</div>
         <div class="detail-value">${typeNames[node.group] || node.group}</div>
     </div>`;
 
     // ID
     html += `<div class="detail-row">
-        <div class="detail-label">标识</div>
+        <div class="detail-label">${t('common.id_label')}</div>
         <div class="detail-value"><code>${node.id}</code></div>
     </div>`;
 
@@ -534,7 +544,7 @@ function showNodeDetail(nodeId) {
     const relatedEdges = allEdges.filter(e => e.from === nodeId || e.to === nodeId);
     if (relatedEdges.length > 0) {
         html += `<div class="detail-row">
-            <div class="detail-label">关联关系 (${relatedEdges.length})</div>
+            <div class="detail-label">${t('common.relations_label')} (${relatedEdges.length})</div>
             <div class="detail-value relation-list">`;
         relatedEdges.forEach(e => {
             const direction = e.from === nodeId ? '→' : '←';
@@ -571,17 +581,17 @@ function showStats(metadata) {
     statsPanel.style.display = 'block';
 
     let html = '';
-    html += `<div class="stat-row"><span>项目名称</span><span class="stat-value">${metadata.project_name}</span></div>`;
-    html += `<div class="stat-row"><span>Python 文件</span><span class="stat-value">${metadata.python_files}</span></div>`;
-    html += `<div class="stat-row"><span>节点总数</span><span class="stat-value">${metadata.total_nodes}</span></div>`;
-    html += `<div class="stat-row"><span>关系总数</span><span class="stat-value">${metadata.total_edges}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_project_name')}</span><span class="stat-value">${metadata.project_name}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_python_files')}</span><span class="stat-value">${metadata.python_files}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_total_nodes')}</span><span class="stat-value">${metadata.total_nodes}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_total_edges')}</span><span class="stat-value">${metadata.total_edges}</span></div>`;
 
     if (metadata.node_type_counts) {
         html += '<hr style="border-color:var(--border);margin:8px 0">';
         const typeLabels = {
-            package: '📦 包', module: '📄 模块', class: '🏷️ 类',
-            function: '⚡ 函数', method: '🔧 方法', constant: '📌 常量',
-            external: '🔗 外部库',
+            package: t('common.node_package'), module: t('common.node_module'), class: t('common.node_class'),
+            function: t('common.node_function'), method: t('common.node_method'), constant: t('common.node_constant'),
+            external: t('common.node_external'),
         };
         for (const [type, count] of Object.entries(metadata.node_type_counts)) {
             html += `<div class="stat-row"><span>${typeLabels[type] || type}</span><span class="stat-value">${count}</span></div>`;
@@ -596,7 +606,7 @@ function showStats(metadata) {
  */
 function handleExport() {
     if (!network) {
-        showToast('请先解析项目', 'error');
+        showToast(t('common.toast_analyze_first'), 'error');
         return;
     }
 
@@ -606,7 +616,7 @@ function handleExport() {
         link.download = `codegraph_${Date.now()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
-        showToast('图片已导出', 'success');
+        showToast(t('common.toast_export_done'), 'success');
     }
 }
 
@@ -629,7 +639,7 @@ async function loadDirectory(path) {
 
         dirList.innerHTML = '';
         if (data.items.length === 0) {
-            dirList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary)">没有子文件夹</div>';
+            dirList.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-secondary)">${t('common.no_subdirs')}</div>`;
             return;
         }
 
@@ -648,7 +658,7 @@ async function loadDirectory(path) {
             dirList.appendChild(div);
         });
     } catch (error) {
-        showToast(`浏览目录失败: ${error.message}`, 'error');
+        showToast(t('common.toast_browse_failed', { message: error.message }), 'error');
     }
 }
 
@@ -661,9 +671,9 @@ function handleSelectDir() {
     if (browsePath) {
         projectPathInput.value = browsePath;
         browseModal.style.display = 'none';
-        showToast(`已选择: ${browsePath}`, 'info');
+        showToast(t('common.toast_selected_dir', { path: browsePath }), 'info');
     } else {
-        showToast('请选择一个文件夹', 'error');
+        showToast(t('common.toast_select_dir'), 'error');
     }
 }
 
@@ -786,7 +796,11 @@ function handleSearch() {
         }
     });
 
-    searchCount.textContent = matchIds.size > 0 ? `找到 ${matchIds.size} 个` : '无匹配';
+    if (matchIds.size > 0) {
+        searchCount.textContent = t('common.search_found', { count: matchIds.size });
+    } else {
+        searchCount.textContent = t('common.search_none');
+    }
 
     if (matchIds.size === 0) {
         clearHighlight();
@@ -847,3 +861,15 @@ function handleSearch() {
         network.fit({ nodes: Array.from(matchIds), animation: true });
     }
 }
+
+window.addEventListener('codegraph:lang-changed', () => {
+    if (currentMetadata) {
+        showStats(currentMetadata);
+    }
+    if (detailPanel.style.display !== 'none' && highlightedNodeId && highlightedNodeId !== 'search') {
+        showNodeDetail(highlightedNodeId);
+    }
+    if (searchInput.value.trim()) {
+        handleSearch();
+    }
+});

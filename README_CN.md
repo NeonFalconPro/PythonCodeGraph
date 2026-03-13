@@ -1,138 +1,183 @@
-# 🔍 PythonCodeGraph
+# CodeGraph
 
-**Python 代码知识图谱生成与可视化工具** — 自动解析 Python 项目的模块、类、函数之间的关系，生成可交互的知识图谱。
+Python 代码知识图谱解析与可视化工具。
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
-![vis-network](https://img.shields.io/badge/vis--network-9.x-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+[English](README.md) | 中文
 
-## ✨ 功能特性
+## 项目简介
 
-- 🧠 **AST 深度解析** — 基于 Python `ast` 模块，静态分析源代码，提取模块、类、函数、方法、变量等实体
-- 🔗 **多维关系识别** — 自动识别 6 种代码关系：导入、继承、包含、调用、装饰器、实例化
-- 🌐 **交互式图谱** — 使用 vis-network 渲染力导向/层级布局图谱，支持缩放、拖拽、聚焦
-- 🎯 **智能高亮** — 点击节点高亮所有关联节点和边，非关联元素自动淡化，关系一目了然
-- 🔍 **节点详情** — 侧边面板展示节点类型、文件路径、行号、文档字符串、参数、基类等信息
-- 📂 **可视化目录浏览** — 内置文件夹选择器，无需手动输入路径
-- 🎛️ **灵活过滤** — 按节点类型（包/模块/类/函数/方法/变量）和关系类型动态过滤
-- 📐 **多种布局** — 支持力导向布局、上下/左右/下上层级布局切换
-- 💾 **导出图片** — 一键导出图谱为 PNG 图片
+CodeGraph 基于 Python AST 对目标项目进行静态解析，提取模块、类、函数、方法、常量以及外部依赖关系，并以可交互图谱方式呈现。
 
-## 📸 图谱预览
+当前支持两种可视化模式：
 
-```
-📦 Package ──包含──▶ 📄 Module ──导入──▶ 📄 Module
-                        │                     │
-                       定义                   定义
-                        ▼                     ▼
-                    🏷️ Class ──继承──▶   🏷️ Class
-                        │
-                       定义
-                        ▼
-                    🔧 Method
-```
+- 标准模式（`/standard`）：基于 vis-network 的力导向/层级图谱
+- 蓝图模式（`/blueprint`）：基于 LiteGraph.js 的模块输入输出蓝图图
 
-## 🚀 快速开始
+## 当前能力
+
+- 项目级 Python 文件扫描（内置常见目录忽略规则）
+- 多实体识别：
+    - package、module、class、function、method、constant、external
+- 多关系识别：
+    - imports、inherits、contains、calls、decorates、instantiates、uses
+- 外部库层级建模（例如 `external:fastapi.staticfiles`）
+- 双模式前端过滤（节点类型、关系类型）
+- 节点详情面板（文件、行号、文档字符串、参数、装饰器、基类）
+- 目录浏览 API（含 Windows 盘符入口）
+
+## 架构设计
+
+### 后端层
+
+- `app.py`
+    - FastAPI 应用入口
+    - 页面路由：`/`、`/standard`、`/blueprint`
+    - API 路由：
+        - `/api/standard/analyze`
+        - `/api/standard/analyze/filtered`
+        - `/api/blueprint/analyze`
+        - `/api/blueprint/analyze/filtered`
+        - `/api/browse`
+    - 共享逻辑：`_build_graph`、`_apply_filters`
+
+- `parser/ast_parser.py`
+    - 项目扫描、AST 解析、节点边构建
+    - 名称解析与去重
+    - 外部库导入链和使用关系补全
+
+- `parser/graph_builder.py`
+    - 调用解析器
+    - 清理孤立点/无效边
+    - 统计元数据
+
+- `parser/models.py`
+    - 领域模型：`NodeData`、`EdgeData`、`GraphData`
+    - 输出适配器：
+        - `to_vis_format()`（标准模式）
+        - `to_blueprint_format()`（蓝图模式）
+
+### 前端层
+
+- `templates/index.html`：模式选择页
+- `templates/standard.html` + `static/js/graph.js`：标准模式
+- `templates/blueprint.html` + `static/js/blueprint.js`：蓝图模式
+- `static/css/style.css`：公共样式
+- `static/css/blueprint.css`：蓝图模式样式补充
+
+## 数据流
+
+1. 用户选择项目目录。
+2. 前端调用分析接口。
+3. 后端校验路径后执行 `GraphBuilder.build()`。
+4. `PythonASTParser.parse_project()` 产出节点和关系。
+5. `GraphData` 转换为前端所需格式。
+6. 前端渲染并提供搜索、过滤、详情、聚焦等交互。
+
+## API 文档
+
+### 页面接口
+
+- `GET /`：模式选择页
+- `GET /standard`：标准模式页面
+- `GET /blueprint`：蓝图模式页面
+
+### 分析接口
+
+- `POST /api/standard/analyze`
+    - 请求示例：
+        ```json
+        { "path": "D:/your/python/project" }
+        ```
+    - 返回：vis-network 节点边结构 + 元数据
+
+- `POST /api/blueprint/analyze`
+    - 请求同上
+    - 返回：蓝图模块/连线结构 + 元数据
+
+- `POST /api/standard/analyze/filtered`
+- `POST /api/blueprint/analyze/filtered`
+    - 请求示例：
+        ```json
+        {
+            "path": "D:/your/python/project",
+            "node_types": ["module", "class", "function", "external"],
+            "edge_types": ["imports", "calls", "uses"],
+            "show_methods": true,
+            "show_variables": false
+        }
+        ```
+
+### 目录浏览接口
+
+- `GET /api/browse?path=...`
+    - 仅返回子目录（隐藏目录默认忽略）
+    - Windows 下空路径会返回可用盘符列表
+
+## 安装与运行
 
 ### 环境要求
 
 - Python 3.8+
-- 现代浏览器（Chrome / Edge / Firefox）
+- Chrome/Edge/Firefox 等现代浏览器
 
 ### 安装
 
 ```bash
-# 克隆项目
-git clone https://github.com/your-username/CodeGraph.git
-cd CodeGraph
-
-# 创建虚拟环境（可选）
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
-
-# 安装依赖
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 运行
+### 启动
 
 ```bash
 python app.py
 ```
 
-或使用 uvicorn：
+或
 
 ```bash
 uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-打开浏览器访问 **http://127.0.0.1:8000**
+访问：`http://127.0.0.1:8000`
 
-### 使用方法
+## 已知边界
 
-1. 在左侧输入框输入 Python 项目的文件夹路径（或点击 📁 按钮浏览选择）
-2. 点击 **🚀 开始解析**
-3. 图谱自动生成，可进行以下交互：
-   - **单击节点** → 高亮所有关联关系 + 显示详情面板
-   - **双击节点** → 聚焦放大到该节点
-   - **点击详情面板中的关联关系** → 跳转并聚焦到目标节点
-   - **点击空白区域** → 取消高亮
-   - **滚轮缩放 / 拖拽** → 浏览图谱
-   - **左侧过滤器** → 按类型筛选显示内容
+- 当前为静态分析，不执行运行时追踪。
+- 大于 1MB 的 Python 文件默认跳过。
+- 文件解码优先 UTF-8，失败后尝试 GBK。
+- 常量提取目前仅覆盖全大写或双下划线命名。
+- 调用关系边当前以模块为调用源（不是函数级调用者节点）。
 
-## 📁 项目结构
+## 目录结构
 
-```
+```text
 CodeGraph/
-├── app.py                  # FastAPI 主应用（Web 服务 + API）
-├── requirements.txt        # Python 依赖
-├── parser/                 # 解析模块
-│   ├── __init__.py
-│   ├── models.py           # 数据模型（Node / Edge / Graph）
-│   ├── ast_parser.py       # Python AST 解析器
-│   └── graph_builder.py    # 知识图谱构建器
-├── templates/
-│   └── index.html          # 前端页面模板
-└── static/
-    ├── css/
-    │   └── style.css       # 样式文件
-    └── js/
-        └── graph.js        # 前端交互逻辑（vis-network）
+    app.py
+    requirements.txt
+    parser/
+        __init__.py
+        ast_parser.py
+        graph_builder.py
+        models.py
+    templates/
+        index.html
+        standard.html
+        blueprint.html
+    static/
+        css/
+            style.css
+            blueprint.css
+        js/
+            graph.js
+            blueprint.js
 ```
 
-## 🔗 识别的关系类型
+## 框架开发指南
 
-| 关系 | 颜色 | 说明 | 示例 |
-|------|------|------|------|
-| 🔴 导入 (imports) | 红色 | 模块间的导入依赖 | `import os` / `from x import y` |
-| 🔵 继承 (inherits) | 蓝色 | 类的继承关系 | `class Dog(Animal)` |
-| ⚪ 包含 (contains) | 灰色虚线 | 模块包含类/函数 | 模块 → 类/函数 |
-| 🟢 调用 (calls) | 绿色 | 函数/方法调用 | `foo()` |
-| 🟣 装饰 (decorates) | 紫色虚线 | 装饰器关系 | `@staticmethod` |
-| 🟡 实例化 (instantiates) | 橙色 | 类的实例化 | `obj = MyClass()` |
+详见：[FRAMEWORK_DEVELOPMENT_GUIDE_CN.md](FRAMEWORK_DEVELOPMENT_GUIDE_CN.md)
 
-## 🛠️ 技术栈
+## 许可证
 
-| 层级 | 技术 | 用途 |
-|------|------|------|
-| 后端框架 | [FastAPI](https://fastapi.tiangolo.com/) | Web 服务 + RESTful API |
-| 代码解析 | Python `ast` 模块 | 语法树分析，提取代码结构 |
-| 数据模型 | [Pydantic](https://docs.pydantic.dev/) | 请求/响应数据验证 |
-| 模板引擎 | [Jinja2](https://jinja.palletsprojects.com/) | HTML 页面渲染 |
-| 图谱可视化 | [vis-network](https://visjs.github.io/vis-network/) | 交互式网络图谱渲染 |
-| ASGI 服务器 | [Uvicorn](https://www.uvicorn.org/) | 高性能异步 HTTP 服务器 |
-
-## 📄 API 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/` | 主页 |
-| `POST` | `/api/analyze` | 解析项目，返回图谱数据 |
-| `POST` | `/api/analyze/filtered` | 带过滤条件的解析 |
-| `GET` | `/api/browse?path=xxx` | 浏览目录结构 |
-
-## 📜 License
-
-MIT License
+MIT License，见 [LICENSE](LICENSE)。

@@ -107,36 +107,41 @@
         }
     </style>
 </head>
-<body>
+<body data-i18n-title-key="index.title">
+    <button id="langToggle" class="lang-toggle"></button>
     <div class="mode-selector">
-        <h1>🌐 CodeGraph</h1>
-        <p>Python 代码知识图谱生成与可视化工具</p>
+        <h1 data-i18n="index.heading">🌐 CodeGraph</h1>
+        <p data-i18n="index.subtitle">Python 代码知识图谱生成与可视化工具</p>
         <div class="mode-cards">
             <a href="/standard" class="mode-card">
                 <div class="mode-icon">📊</div>
-                <h2>标准模式</h2>
-                <p>基于 vis-network 的力导向图谱可视化</p>
+                <h2 data-i18n="index.standard_title">标准模式</h2>
+                <p data-i18n="index.standard_desc">基于 vis-network 的力导向图谱可视化</p>
                 <ul>
-                    <li>力导向 / 层级多种布局</li>
-                    <li>节点高亮与邻域聚焦</li>
-                    <li>节点搜索与实时过滤</li>
-                    <li>外部库智能分组</li>
+                    <li data-i18n="index.standard_feat1">力导向 / 层级多种布局</li>
+                    <li data-i18n="index.standard_feat2">节点高亮与邻域聚焦</li>
+                    <li data-i18n="index.standard_feat3">节点搜索与实时过滤</li>
+                    <li data-i18n="index.standard_feat4">外部库智能分组</li>
                 </ul>
-                <span class="mode-badge badge-stable">稳定版</span>
+                <span class="mode-badge badge-stable" data-i18n="index.stable_badge">稳定版</span>
             </a>
             <a href="/blueprint" class="mode-card">
                 <div class="mode-icon">🔧</div>
-                <h2>蓝图模式</h2>
-                <p>基于 LiteGraph.js 的蓝图式节点编辑器</p>
+                <h2 data-i18n="index.blueprint_title">蓝图模式</h2>
+                <p data-i18n="index.blueprint_desc">基于 LiteGraph.js 的蓝图式节点编辑器</p>
                 <ul>
-                    <li>UE 蓝图风格节点编辑器</li>
-                    <li>输入/输出插槽连线</li>
-                    <li>自由拖拽编排布局</li>
-                    <li>节点类型与关系过滤</li>
+                    <li data-i18n="index.blueprint_feat1">UE 蓝图风格节点编辑器</li>
+                    <li data-i18n="index.blueprint_feat2">输入/输出插槽连线</li>
+                    <li data-i18n="index.blueprint_feat3">自由拖拽编排布局</li>
+                    <li data-i18n="index.blueprint_feat4">节点类型与关系过滤</li>
                 </ul>
-                <span class="mode-badge badge-new">新功能</span>
+                <span class="mode-badge badge-new" data-i18n="index.new_badge">新功能</span>
             </a>
         </div>
     </div>
+    <script src="/static/js/i18n.js"></script>
+    <script>
+        window.CodeGraphI18n.setupLanguageToggle('langToggle');
+    </script>
 </body>
 </html>

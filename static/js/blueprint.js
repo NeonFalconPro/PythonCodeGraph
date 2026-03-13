@@ -46,6 +46,13 @@ let lgNodeMap = {};            // module_id → LGraphNode
 let browsePath = '';
 let browseParent = '';
 
+function t(key, vars) {
+    if (window.CodeGraphI18n && typeof window.CodeGraphI18n.t === 'function') {
+        return window.CodeGraphI18n.t(key, vars);
+    }
+    return key;
+}
+
 // ============ DOM 元素 ============
 const projectPathInput = document.getElementById('projectPath');
 const analyzeBtn = document.getElementById('analyzeBtn');
@@ -161,7 +168,7 @@ function resizeCanvas() {
 
 async function handleAnalyze() {
     const path = projectPathInput.value.trim();
-    if (!path) { showToast('请输入项目路径', 'error'); return; }
+    if (!path) { showToast(t('common.toast_input_path'), 'error'); return; }
 
     loading.style.display = 'flex';
     analyzeBtn.disabled = true;
@@ -186,13 +193,13 @@ async function handleAnalyze() {
 
             buildBlueprintGraph(getFilteredData());
             showStats(currentMetadata);
-            showToast(
-                `解析完成: ${currentMetadata.total_nodes} 个节点, ${currentMetadata.total_edges} 条关系`,
-                'success'
-            );
+            showToast(t('common.toast_parse_done', {
+                nodes: currentMetadata.total_nodes,
+                edges: currentMetadata.total_edges,
+            }), 'success');
         }
     } catch (error) {
-        showToast(`错误: ${error.message}`, 'error');
+        showToast(t('common.toast_error_prefix', { message: error.message }), 'error');
     } finally {
         loading.style.display = 'none';
         analyzeBtn.disabled = false;
@@ -267,8 +274,10 @@ function buildBlueprintGraph(data) {
         const tgtSlots = slotMap[link.tgt_module];
         if (!srcSlots || !tgtSlots) return;
 
-        const outIdx = srcSlots.outputMap[link.item_id];
-        const inIdx = tgtSlots.inputMap[link.item_id];
+        const srcItemId = link.src_item_id || link.item_id;
+        const tgtItemId = link.tgt_item_id || link.item_id;
+        const outIdx = srcSlots.outputMap[srcItemId];
+        const inIdx = tgtSlots.inputMap[tgtItemId];
         if (outIdx === undefined || inIdx === undefined) return;
 
         const lgLink = srcNode.connect(outIdx, tgtNode, inIdx);
@@ -505,13 +514,19 @@ function getFilteredData() {
         mod.inputs.forEach(inp => validInputs.add(`${mod.id}|${inp.id}`));
     });
 
-    // 过滤链接
+    // 过滤链接（兼容同 ID 连线与分离 ID 连线）
     const links = rawBlueprintData.links.filter(link =>
-        edgeTypes.has(link.edge_type) &&
-        moduleIds.has(link.src_module) &&
-        moduleIds.has(link.tgt_module) &&
-        validOutputs.has(`${link.src_module}|${link.item_id}`) &&
-        validInputs.has(`${link.tgt_module}|${link.item_id}`)
+        (() => {
+            const srcItemId = link.src_item_id || link.item_id;
+            const tgtItemId = link.tgt_item_id || link.item_id;
+            return (
+                edgeTypes.has(link.edge_type) &&
+                moduleIds.has(link.src_module) &&
+                moduleIds.has(link.tgt_module) &&
+                validOutputs.has(`${link.src_module}|${srcItemId}`) &&
+                validInputs.has(`${link.tgt_module}|${tgtItemId}`)
+            );
+        })()
     );
 
     return { modules, links };
@@ -553,7 +568,9 @@ function handleSearch() {
         }
     });
 
-    searchCount.textContent = matchCount > 0 ? `找到 ${matchCount} 个` : '无匹配';
+    searchCount.textContent = matchCount > 0
+        ? t('common.search_found', { count: matchCount })
+        : t('common.search_none');
     if (graphCanvas) graphCanvas.setDirty(true, true);
 }
 
@@ -581,20 +598,20 @@ function showNodeDetail(node) {
 
     // 类型
     html += `<div class="detail-row">
-        <div class="detail-label">类型</div>
-        <div class="detail-value">${isExternal ? '🔗 外部库' : '📄 模块'}</div>
+        <div class="detail-label">${t('common.type_label')}</div>
+        <div class="detail-value">${isExternal ? t('common.node_external') : t('common.node_module')}</div>
     </div>`;
 
     // 标识
     html += `<div class="detail-row">
-        <div class="detail-label">标识</div>
+        <div class="detail-label">${t('common.id_label')}</div>
         <div class="detail-value"><code>${mod.id}</code></div>
     </div>`;
 
     // 文件路径
     if (mod.file_path) {
         html += `<div class="detail-row">
-            <div class="detail-label">文件</div>
+            <div class="detail-label">${t('common.file_label')}</div>
             <div class="detail-value">${mod.file_path}</div>
         </div>`;
     }
@@ -602,7 +619,7 @@ function showNodeDetail(node) {
     // 定义项（输出引脚）
     if (mod.outputs.length > 0) {
         html += `<div class="detail-row">
-            <div class="detail-label">定义项 (${mod.outputs.length})</div>
+            <div class="detail-label">${t('common.defs_label')} (${mod.outputs.length})</div>
             <div class="detail-value"><div class="bp-item-list">`;
         mod.outputs.forEach(out => {
             const icon = SLOT_ICONS[out.node_type] || "";
@@ -614,7 +631,7 @@ function showNodeDetail(node) {
     // 引入项（输入引脚）
     if (mod.inputs.length > 0) {
         html += `<div class="detail-row">
-            <div class="detail-label">引入项 (${mod.inputs.length})</div>
+            <div class="detail-label">${t('common.refs_label')} (${mod.inputs.length})</div>
             <div class="detail-value"><div class="bp-item-list">`;
         mod.inputs.forEach(inp => {
             const icon = SLOT_ICONS[inp.node_type] || "";
@@ -646,7 +663,7 @@ function showNodeDetail(node) {
 
     if (relatedModules.length > 0) {
         html += `<div class="detail-row">
-            <div class="detail-label">关联模块 (${relatedModules.length})</div>
+            <div class="detail-label">${t('common.related_modules')} (${relatedModules.length})</div>
             <div class="detail-value relation-list">`;
         relatedModules.forEach(rm => {
             html += `<div class="relation-item" data-target-node="${encodeURIComponent(rm.id)}" title="点击定位">
@@ -688,16 +705,16 @@ function focusOnNode(moduleId) {
 function showStats(metadata) {
     statsPanel.style.display = 'block';
     let html = '';
-    html += `<div class="stat-row"><span>项目名称</span><span class="stat-value">${metadata.project_name}</span></div>`;
-    html += `<div class="stat-row"><span>Python 文件</span><span class="stat-value">${metadata.python_files}</span></div>`;
-    html += `<div class="stat-row"><span>节点总数</span><span class="stat-value">${metadata.total_nodes}</span></div>`;
-    html += `<div class="stat-row"><span>关系总数</span><span class="stat-value">${metadata.total_edges}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_project_name')}</span><span class="stat-value">${metadata.project_name}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_python_files')}</span><span class="stat-value">${metadata.python_files}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_total_nodes')}</span><span class="stat-value">${metadata.total_nodes}</span></div>`;
+    html += `<div class="stat-row"><span>${t('common.stats_total_edges')}</span><span class="stat-value">${metadata.total_edges}</span></div>`;
     if (metadata.node_type_counts) {
         html += '<hr style="border-color:var(--border);margin:8px 0">';
         const typeLabels = {
-            package: '📦 包', module: '📄 模块', class: '🏷️ 类',
-            function: '⚡ 函数', method: '🔧 方法', constant: '📌 常量',
-            external: '🔗 外部库',
+            package: t('common.node_package'), module: t('common.node_module'), class: t('common.node_class'),
+            function: t('common.node_function'), method: t('common.node_method'), constant: t('common.node_constant'),
+            external: t('common.node_external'),
         };
         for (const [type, count] of Object.entries(metadata.node_type_counts)) {
             html += `<div class="stat-row"><span>${typeLabels[type] || type}</span><span class="stat-value">${count}</span></div>`;
@@ -725,7 +742,7 @@ async function loadDirectory(path) {
 
         dirList.innerHTML = '';
         if (data.items.length === 0) {
-            dirList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary)">没有子文件夹</div>';
+            dirList.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-secondary)">${t('common.no_subdirs')}</div>`;
             return;
         }
         data.items.forEach(item => {
@@ -741,7 +758,7 @@ async function loadDirectory(path) {
             dirList.appendChild(div);
         });
     } catch (error) {
-        showToast(`浏览目录失败: ${error.message}`, 'error');
+        showToast(t('common.toast_browse_failed', { message: error.message }), 'error');
     }
 }
 
@@ -751,9 +768,9 @@ function handleSelectDir() {
     if (browsePath) {
         projectPathInput.value = browsePath;
         browseModal.style.display = 'none';
-        showToast(`已选择: ${browsePath}`, 'info');
+        showToast(t('common.toast_selected_dir', { path: browsePath }), 'info');
     } else {
-        showToast('请选择一个文件夹', 'error');
+        showToast(t('common.toast_select_dir'), 'error');
     }
 }
 
@@ -770,3 +787,12 @@ function showToast(message, type = 'info') {
         setTimeout(() => toast.remove(), 300);
     }, 3000);
 }
+
+window.addEventListener('codegraph:lang-changed', () => {
+    if (currentMetadata) {
+        showStats(currentMetadata);
+    }
+    if (searchInput.value.trim()) {
+        handleSearch();
+    }
+});

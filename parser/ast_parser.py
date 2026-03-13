@@ -25,6 +25,8 @@ class PythonASTParser:
         self._func_name_index: Dict[str, str] = {}   # 函数名 -> 节点ID 索引
         self._method_index: Dict[str, Dict[str, str]] = {}  # 类ID -> {方法名 -> 方法ID}
         self._current_import_map: Dict[str, str] = {}  # 每个文件的导入别名 -> 外部节点ID
+        self._pending_internal_import_items: List[Tuple[str, str, str]] = []
+        # (source_module_id, import_module, imported_name)
 
     def parse_project(self):
         """解析整个项目"""
@@ -37,6 +39,9 @@ class PythonASTParser:
         # 3. 解析每个文件
         for py_file in py_files:
             self._parse_file(py_file)
+
+        # 4. 统一补齐 from x import y 的内部符号导入边，避免解析顺序导致漏边
+        self._resolve_pending_internal_import_items()
 
         return self.nodes, self.edges
 
@@ -334,17 +339,9 @@ class PythonASTParser:
                         for alias in node.names:
                             if alias.name == '*':
                                 continue
-                            item_id = (
-                                self._resolve_class_id(alias.name, import_module) or
-                                self._resolve_function_id(alias.name, import_module)
+                            self._pending_internal_import_items.append(
+                                (module_id, import_module, alias.name)
                             )
-                            if item_id and item_id in self.nodes:
-                                self._add_edge(EdgeData(
-                                    source=module_id,
-                                    target=item_id,
-                                    edge_type=EdgeType.IMPORTS,
-                                    label=f"导入 {alias.name}",
-                                ))
                 elif node.level == 0:
                     # 外部库导入
                     names = [alias.name for alias in node.names if alias.name != '*']
@@ -550,6 +547,34 @@ class PythonASTParser:
                     edge_type=EdgeType.USES,
                     label="使用",
                 ))
+
+    def _resolve_pending_internal_import_items(self):
+        """补齐 from x import y 的内部符号边，避免因文件解析顺序导致漏连线"""
+        for source_module_id, import_module, imported_name in self._pending_internal_import_items:
+            item_id = self._resolve_imported_item_id(import_module, imported_name)
+            if item_id and item_id in self.nodes:
+                self._add_edge(EdgeData(
+                    source=source_module_id,
+                    target=item_id,
+                    edge_type=EdgeType.IMPORTS,
+                    label=f"导入 {imported_name}",
+                ))
+
+    def _resolve_imported_item_id(self, import_module: str, imported_name: str) -> Optional[str]:
+        """优先按模块内精确匹配导入项，再回退到全局名称索引"""
+        exact_candidates = (
+            f"class:{import_module}.{imported_name}",
+            f"function:{import_module}.{imported_name}",
+            f"constant:{import_module}.{imported_name}",
+        )
+        for candidate in exact_candidates:
+            if candidate in self.nodes:
+                return candidate
+
+        return (
+            self._class_name_index.get(imported_name)
+            or self._func_name_index.get(imported_name)
+        )
 
     # ============ 辅助方法 ============
 

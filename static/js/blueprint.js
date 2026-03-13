@@ -45,6 +45,15 @@ let currentMetadata = null;
 let lgNodeMap = {};            // module_id → LGraphNode
 let browsePath = '';
 let browseParent = '';
+let currentRenderedData = null;
+let lastBaseData = null;
+let highlightedModuleId = null;
+let hoveredPinInfo = null;
+let pinTooltipEl = null;
+let focusMode = {
+    active: false,
+    centerId: null,
+};
 
 function t(key, vars) {
     if (window.CodeGraphI18n && typeof window.CodeGraphI18n.t === 'function') {
@@ -77,6 +86,9 @@ const dirList = document.getElementById('dirList');
 const selectDirBtn = document.getElementById('selectDirBtn');
 const searchInput = document.getElementById('searchInput');
 const searchCount = document.getElementById('searchCount');
+const backToFullBtn = document.getElementById('backToFullBtn');
+const appContainer = document.querySelector('.app-container');
+const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
 
 // ============ 事件监听 ============
 analyzeBtn.addEventListener('click', handleAnalyze);
@@ -89,6 +101,7 @@ cancelBrowse.addEventListener('click', () => browseModal.style.display = 'none')
 parentDirBtn.addEventListener('click', handleParentDir);
 selectDirBtn.addEventListener('click', handleSelectDir);
 searchInput.addEventListener('input', handleSearch);
+backToFullBtn.addEventListener('click', exitFocusMode);
 
 document.querySelectorAll('.node-filter, .edge-filter').forEach(cb => {
     cb.addEventListener('change', applyFilters);
@@ -101,6 +114,29 @@ projectPathInput.addEventListener('keydown', (e) => {
 document.querySelectorAll('input[type="text"], select').forEach(el => {
     el.addEventListener('keydown', (e) => e.stopPropagation());
 });
+
+initSidebarToggle();
+
+function initSidebarToggle() {
+    if (!appContainer || !sidebarToggleBtn) return;
+
+    const syncToggleButton = () => {
+        const collapsed = appContainer.classList.contains('sidebar-collapsed');
+        sidebarToggleBtn.textContent = collapsed ? '⮞' : '⮜';
+        sidebarToggleBtn.title = collapsed ? t('common.expand_sidebar') : t('common.collapse_sidebar');
+    };
+
+    sidebarToggleBtn.addEventListener('click', () => {
+        appContainer.classList.toggle('sidebar-collapsed');
+        syncToggleButton();
+        setTimeout(() => {
+            resizeCanvas();
+            if (graphCanvas) graphCanvas.setDirty(true, true);
+        }, 180);
+    });
+
+    syncToggleButton();
+}
 
 // ============ LiteGraph 初始化 ============
 
@@ -141,19 +177,190 @@ function initLiteGraph() {
     graphCanvas.allow_searchbox = false;
     graphCanvas.default_link_color = '#6c5ce7';
 
+    // 禁用画布右键菜单（新增节点/分组入口在此），保留拖拽与缩放。
+    canvasEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+    });
+
+    // 某些 LiteGraph 版本会直接调用内部 context menu 处理，这里统一短路。
+    if (typeof graphCanvas.processContextMenu === 'function') {
+        graphCanvas.processContextMenu = function() {
+            return false;
+        };
+    }
+
+    // 明确清空各类菜单项，避免节点/分组菜单绕过。
+    graphCanvas.getCanvasMenuOptions = function() { return []; };
+    graphCanvas.getNodeMenuOptions = function() { return []; };
+    graphCanvas.getGroupMenuOptions = function() { return []; };
+
     graphCanvas.onNodeSelected = function(node) {
         if (node && node.properties && node.properties.module_id) {
+            highlightNeighborhood(node.properties.module_id);
             showNodeDetail(node);
         }
     };
     graphCanvas.onNodeDeselected = function() {
         detailPanel.style.display = 'none';
+        clearHighlight();
     };
+    graphCanvas.onNodeDblClicked = function(node) {
+        if (node && node.properties && node.properties.module_id) {
+            enterFocusMode(node.properties.module_id);
+        }
+    };
+
+    canvasEl.addEventListener('mousemove', handleCanvasMouseMove);
+    canvasEl.addEventListener('mouseleave', handleCanvasMouseLeave);
+    canvasEl.addEventListener('click', handleCanvasPinClick);
 
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     graph.start();
 }
+
+function ensurePinTooltip() {
+    if (pinTooltipEl) return pinTooltipEl;
+    pinTooltipEl = document.createElement('div');
+    pinTooltipEl.className = 'bp-pin-tooltip';
+    pinTooltipEl.style.display = 'none';
+    document.body.appendChild(pinTooltipEl);
+    return pinTooltipEl;
+}
+
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeDocstring(docstring) {
+    const text = String(docstring || '').trim();
+    return text || '暂无注释';
+}
+
+function showPinTooltip(content, clientX, clientY) {
+    const el = ensurePinTooltip();
+    el.innerHTML = escapeHtml(content);
+    el.style.display = 'block';
+    const offset = 14;
+    const maxX = window.innerWidth - el.offsetWidth - 8;
+    const maxY = window.innerHeight - el.offsetHeight - 8;
+    el.style.left = `${Math.max(8, Math.min(clientX + offset, maxX))}px`;
+    el.style.top = `${Math.max(8, Math.min(clientY + offset, maxY))}px`;
+}
+
+function hidePinTooltip() {
+    if (pinTooltipEl) {
+        pinTooltipEl.style.display = 'none';
+    }
+}
+
+function getGraphPosFromMouse(event) {
+    if (!graphCanvas) return null;
+    const canvasEl = graphCanvas.canvas;
+    const rect = canvasEl.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / graphCanvas.ds.scale - graphCanvas.ds.offset[0];
+    const y = (event.clientY - rect.top) / graphCanvas.ds.scale - graphCanvas.ds.offset[1];
+    return [x, y];
+}
+
+function findPinAtGraphPos(x, y) {
+    if (!graph || !graph._nodes) return null;
+    const tmp = [0, 0];
+
+    for (let n = graph._nodes.length - 1; n >= 0; n--) {
+        const node = graph._nodes[n];
+        const moduleId = node.properties && node.properties.module_id;
+        if (!moduleId) continue;
+
+        const inputs = node.inputs || [];
+        for (let i = 0; i < inputs.length; i++) {
+            const slot = inputs[i];
+            if (!slot || !slot._itemId) continue;
+            node.getConnectionPos(true, i, tmp);
+            const inXMin = node.pos[0] - 12;
+            const inXMax = node.pos[0] + 150;
+            const inYMin = tmp[1] - 11;
+            const inYMax = tmp[1] + 11;
+            if (x >= inXMin && x <= inXMax && y >= inYMin && y <= inYMax) {
+                return {
+                    moduleId,
+                    direction: 'input',
+                    itemId: slot._itemId,
+                    label: slot._label || slot.name || slot._itemId,
+                    docstring: normalizeDocstring(slot._docstring),
+                };
+            }
+        }
+
+        const outputs = node.outputs || [];
+        for (let i = 0; i < outputs.length; i++) {
+            const slot = outputs[i];
+            if (!slot || !slot._itemId) continue;
+            node.getConnectionPos(false, i, tmp);
+            const outXMin = node.pos[0] + node.size[0] - 150;
+            const outXMax = node.pos[0] + node.size[0] + 12;
+            const outYMin = tmp[1] - 11;
+            const outYMax = tmp[1] + 11;
+            if (x >= outXMin && x <= outXMax && y >= outYMin && y <= outYMax) {
+                return {
+                    moduleId,
+                    direction: 'output',
+                    itemId: slot._itemId,
+                    label: slot._label || slot.name || slot._itemId,
+                    docstring: normalizeDocstring(slot._docstring),
+                };
+            }
+        }
+    }
+    return null;
+}
+
+function handleCanvasMouseMove(event) {
+    const pos = getGraphPosFromMouse(event);
+    if (!pos) return;
+    const pin = findPinAtGraphPos(pos[0], pos[1]);
+    hoveredPinInfo = pin;
+    if (!pin) {
+        hidePinTooltip();
+        return;
+    }
+    const text = `${pin.label}\n${pin.docstring}`;
+    showPinTooltip(text, event.clientX, event.clientY);
+}
+
+function handleCanvasMouseLeave() {
+    hoveredPinInfo = null;
+    hidePinTooltip();
+}
+
+function handleCanvasPinClick() {
+    if (!hoveredPinInfo) return;
+    highlightByPin(hoveredPinInfo.moduleId, hoveredPinInfo.itemId, hoveredPinInfo.direction);
+}
+
+function isEditableTarget(target) {
+    if (!target) return false;
+    const tag = target.tagName ? target.tagName.toUpperCase() : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return !!target.isContentEditable;
+}
+
+function handleBlueprintHotkeys(event) {
+    if (isEditableTarget(event.target)) return;
+    const key = event.key;
+    // 禁用删除快捷键，防止误删节点/连线。
+    if (key === 'Delete' || key === 'Backspace') {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+}
+
+document.addEventListener('keydown', handleBlueprintHotkeys, true);
 
 function resizeCanvas() {
     const canvasEl = document.getElementById('blueprintCanvas');
@@ -213,6 +420,7 @@ async function handleAnalyze() {
 function buildBlueprintGraph(data) {
     graph.clear();
     lgNodeMap = {};
+    currentRenderedData = data;
 
     // slot 索引映射: module_id → { outputMap: {item_id: idx}, inputMap: {item_id: idx} }
     const slotMap = {};
@@ -241,6 +449,9 @@ function buildBlueprintGraph(data) {
             node.addInput(`${icon} ${inp.label}`, "*");
             if (node.inputs && node.inputs[slotIdx]) {
                 node.inputs[slotIdx].color_on = SLOT_COLORS[inp.node_type] || "#aaa";
+                node.inputs[slotIdx]._itemId = inp.id;
+                node.inputs[slotIdx]._label = inp.label;
+                node.inputs[slotIdx]._docstring = inp.docstring || '';
             }
             slotMap[mod.id].inputMap[inp.id] = slotIdx;
         });
@@ -252,6 +463,9 @@ function buildBlueprintGraph(data) {
             node.addOutput(`${icon} ${out.label}`, "*");
             if (node.outputs && node.outputs[slotIdx]) {
                 node.outputs[slotIdx].color_on = SLOT_COLORS[out.node_type] || "#aaa";
+                node.outputs[slotIdx]._itemId = out.id;
+                node.outputs[slotIdx]._label = out.label;
+                node.outputs[slotIdx]._docstring = out.docstring || '';
             }
             slotMap[mod.id].outputMap[out.id] = slotIdx;
         });
@@ -286,7 +500,13 @@ function buildBlueprintGraph(data) {
         if (lgLink && lgLink.id !== undefined) {
             const linkObj = graph.links[lgLink.id];
             if (linkObj) {
-                linkObj.color = EDGE_TYPE_CONFIG[link.edge_type]?.color || '#6c5ce7';
+                const c = EDGE_TYPE_CONFIG[link.edge_type]?.color || '#6c5ce7';
+                linkObj.color = c;
+                linkObj._origColor = c;
+                linkObj._srcModule = link.src_module;
+                linkObj._tgtModule = link.tgt_module;
+                linkObj._srcItemId = srcItemId;
+                linkObj._tgtItemId = tgtItemId;
             }
         }
     });
@@ -294,7 +514,7 @@ function buildBlueprintGraph(data) {
     // 3. 自动布局
     performAutoLayout();
 
-    // 4. 创建分组
+    // 4. 清理分组（蓝图分组已禁用）
     createNodeGroups();
 
     // 5. 刷新
@@ -302,79 +522,177 @@ function buildBlueprintGraph(data) {
     setTimeout(fitToView, 200);
 }
 
-// ============ 分组 ============
+function getNodeBaseStyle(node) {
+    const isExt = node.properties && node.properties.module_type === 'external';
+    return {
+        color: isExt ? '#FF9F43' : '#4ECDC4',
+        bgcolor: isExt ? '#3d2e1a' : '#1a3a38',
+    };
+}
 
-const GROUP_COLORS = [
-    "#2d4a3e80", "#3d2e1a80", "#2a2d4e80", "#4a2d3e80",
-    "#2d3d4a80", "#4a3d2d80", "#3e2d4a80", "#2d4a4a80",
-];
+function clearHighlight() {
+    if (!graph || !graph._nodes) return;
+    highlightedModuleId = null;
 
-function createNodeGroups() {
-    if (!graph || !graph._nodes || graph._nodes.length === 0) return;
+    graph._nodes.forEach(node => {
+        const base = getNodeBaseStyle(node);
+        node.color = base.color;
+        node.bgcolor = base.bgcolor;
+    });
 
-    // 移除已有分组
-    if (graph._groups) {
-        graph._groups.length = 0;
+    if (graph.links) {
+        Object.values(graph.links).forEach(link => {
+            if (!link) return;
+            link.color = link._origColor || '#6c5ce7';
+        });
     }
 
-    // 按包前缀对节点分组
-    const groupMap = {};  // prefix → [node, ...]
+    if (graphCanvas) graphCanvas.setDirty(true, true);
+}
 
-    graph._nodes.forEach(n => {
-        const modId = n.properties.module_id || "";
-        const modType = n.properties.module_type;
+function highlightNeighborhood(moduleId) {
+    if (!graph || !graph._nodes) return;
+    highlightedModuleId = moduleId;
 
-        let prefix = "";
-        if (modType === "external") {
-            // external:fastapi.staticfiles → 取 "fastapi"
-            const name = modId.replace(/^external:/, "");
-            prefix = "📦 " + name.split(".")[0];
-        } else {
-            // module:parser.ast_parser → 取 "parser"
-            const name = modId.replace(/^module:/, "");
-            const parts = name.split(".");
-            if (parts.length > 1) {
-                prefix = "📁 " + parts[0];
+    const related = new Set([moduleId]);
+    const relatedLinkIds = new Set();
+
+    if (graph.links) {
+        Object.entries(graph.links).forEach(([id, link]) => {
+            if (!link) return;
+            const src = link._srcModule;
+            const tgt = link._tgtModule;
+            if (!src || !tgt) return;
+            if (src === moduleId || tgt === moduleId) {
+                related.add(src);
+                related.add(tgt);
+                relatedLinkIds.add(String(id));
             }
-            // 单层模块（如 app）不分组
-        }
-
-        if (prefix) {
-            if (!groupMap[prefix]) groupMap[prefix] = [];
-            groupMap[prefix].push(n);
-        }
-    });
-
-    // 只对包含 2+ 个节点的前缀创建分组
-    let colorIdx = 0;
-    Object.entries(groupMap).forEach(([prefix, nodes]) => {
-        if (nodes.length < 2) return;
-
-        const group = new LGraphGroup();
-        group.title = prefix;
-        group.color = GROUP_COLORS[colorIdx % GROUP_COLORS.length];
-        colorIdx++;
-
-        // 计算包围盒
-        const padding = 30;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        nodes.forEach(n => {
-            minX = Math.min(minX, n.pos[0]);
-            minY = Math.min(minY, n.pos[1]);
-            maxX = Math.max(maxX, n.pos[0] + n.size[0]);
-            maxY = Math.max(maxY, n.pos[1] + n.size[1]);
         });
+    }
 
-        group._bounding = [
-            minX - padding,
-            minY - padding - 20,  // 标题高度
-            maxX - minX + padding * 2,
-            maxY - minY + padding * 2 + 20,
-        ];
-
-        graph.add(group);
+    graph._nodes.forEach(node => {
+        const nid = node.properties && node.properties.module_id;
+        const base = getNodeBaseStyle(node);
+        if (related.has(nid)) {
+            node.color = nid === moduleId ? '#ffd166' : '#7dd3fc';
+            node.bgcolor = base.bgcolor;
+        } else {
+            node.color = '#3a3b5c';
+            node.bgcolor = '#252640';
+        }
     });
 
+    if (graph.links) {
+        Object.entries(graph.links).forEach(([id, link]) => {
+            if (!link) return;
+            if (relatedLinkIds.has(String(id))) {
+                link.color = link._origColor || '#6c5ce7';
+            } else {
+                link.color = 'rgba(90, 90, 120, 0.20)';
+            }
+        });
+    }
+
+    if (graphCanvas) graphCanvas.setDirty(true, true);
+}
+
+function highlightByPin(moduleId, itemId, direction) {
+    if (!graph || !graph._nodes || !graph.links || !moduleId || !itemId) return;
+
+    const relatedModules = new Set([moduleId]);
+    const activeLinks = new Set();
+
+    Object.entries(graph.links).forEach(([id, link]) => {
+        if (!link) return;
+        const srcModule = link._srcModule;
+        const tgtModule = link._tgtModule;
+        const srcItemId = link._srcItemId;
+        const tgtItemId = link._tgtItemId;
+        if (!srcModule || !tgtModule) return;
+
+        const matched = direction === 'output'
+            ? (srcModule === moduleId && srcItemId === itemId)
+            : (tgtModule === moduleId && tgtItemId === itemId);
+
+        if (matched) {
+            activeLinks.add(String(id));
+            relatedModules.add(srcModule);
+            relatedModules.add(tgtModule);
+        }
+    });
+
+    graph._nodes.forEach(node => {
+        const nid = node.properties && node.properties.module_id;
+        const base = getNodeBaseStyle(node);
+        if (relatedModules.has(nid)) {
+            node.color = nid === moduleId ? '#ffd166' : '#7dd3fc';
+            node.bgcolor = base.bgcolor;
+        } else {
+            node.color = '#3a3b5c';
+            node.bgcolor = '#252640';
+        }
+    });
+
+    Object.entries(graph.links).forEach(([id, link]) => {
+        if (!link) return;
+        link.color = activeLinks.has(String(id))
+            ? (link._origColor || '#6c5ce7')
+            : 'rgba(90, 90, 120, 0.20)';
+    });
+
+    if (graphCanvas) graphCanvas.setDirty(true, true);
+}
+
+function buildFocusedData(centerId, baseData) {
+    if (!baseData) return null;
+    const nodeSet = new Set([centerId]);
+    const links = [];
+
+    (baseData.links || []).forEach(link => {
+        if (link.src_module === centerId || link.tgt_module === centerId) {
+            links.push(link);
+            nodeSet.add(link.src_module);
+            nodeSet.add(link.tgt_module);
+        }
+    });
+
+    const modules = (baseData.modules || []).filter(m => nodeSet.has(m.id));
+    return { modules, links };
+}
+
+function enterFocusMode(centerId) {
+    if (!centerId || focusMode.active) return;
+    const base = currentRenderedData || getFilteredData();
+    if (!base) return;
+    const focused = buildFocusedData(centerId, base);
+    if (!focused || focused.modules.length === 0) return;
+
+    lastBaseData = base;
+    focusMode.active = true;
+    focusMode.centerId = centerId;
+    backToFullBtn.style.display = 'inline-flex';
+
+    buildBlueprintGraph(focused);
+}
+
+function exitFocusMode() {
+    if (!focusMode.active) return;
+    focusMode.active = false;
+    focusMode.centerId = null;
+    backToFullBtn.style.display = 'none';
+    clearHighlight();
+
+    const base = lastBaseData || getFilteredData();
+    buildBlueprintGraph(base);
+}
+
+// ============ 分组 ============
+
+function createNodeGroups() {
+    // 蓝图模式禁用分组，仅保留节点与连线，避免复杂分组导致重叠和交互问题。
+    if (!graph) return;
+    if (graph._groups) graph._groups.length = 0;
     if (graphCanvas) graphCanvas.setDirty(true, true);
 }
 
@@ -417,8 +735,8 @@ function performAutoLayout() {
     }
     projects.forEach(n => getDepth(n.properties.module_id));
 
-    const xSpacing = 800; // 同层节点间距
-    const yPadding = 200; // 层间距
+    const xSpacing = 400; // 同层节点间距
+    const yPadding = 80; // 层间距
 
     // 外部包列（最左）
     let y = 100;
@@ -534,6 +852,11 @@ function getFilteredData() {
 
 function applyFilters() {
     if (!rawBlueprintData) return;
+    if (focusMode.active) {
+        focusMode.active = false;
+        focusMode.centerId = null;
+        backToFullBtn.style.display = 'none';
+    }
     buildBlueprintGraph(getFilteredData());
 }
 
@@ -623,7 +946,7 @@ function showNodeDetail(node) {
             <div class="detail-value"><div class="bp-item-list">`;
         mod.outputs.forEach(out => {
             const icon = SLOT_ICONS[out.node_type] || "";
-            html += `<div class="bp-item-tag output-tag">${icon} ${out.label}</div>`;
+            html += `<div class="bp-item-tag output-tag interactive" data-item-id="${encodeURIComponent(out.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="output" data-doc="${encodeURIComponent(normalizeDocstring(out.docstring))}">${icon} ${out.label}</div>`;
         });
         html += `</div></div></div>`;
     }
@@ -636,7 +959,7 @@ function showNodeDetail(node) {
         mod.inputs.forEach(inp => {
             const icon = SLOT_ICONS[inp.node_type] || "";
             const edgeCfg = EDGE_TYPE_CONFIG[inp.edge_type] || {};
-            html += `<div class="bp-item-tag input-tag">${icon} ${inp.label}
+            html += `<div class="bp-item-tag input-tag interactive" data-item-id="${encodeURIComponent(inp.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="input" data-doc="${encodeURIComponent(normalizeDocstring(inp.docstring))}">${icon} ${inp.label}
                 <span class="edge-badge" style="background:${edgeCfg.color || '#666'}">${edgeCfg.label || inp.edge_type}</span>
             </div>`;
         });
@@ -682,6 +1005,33 @@ function showNodeDetail(node) {
         item.addEventListener('click', () => {
             const targetId = decodeURIComponent(item.getAttribute('data-target-node'));
             focusOnNode(targetId);
+        });
+    });
+
+    detailContent.querySelectorAll('.bp-item-tag.interactive').forEach(item => {
+        item.addEventListener('click', () => {
+            const moduleIdAttr = item.getAttribute('data-module-id') || '';
+            const itemIdAttr = item.getAttribute('data-item-id') || '';
+            const direction = item.getAttribute('data-direction') || 'input';
+            const moduleId = decodeURIComponent(moduleIdAttr);
+            const itemId = decodeURIComponent(itemIdAttr);
+            highlightByPin(moduleId, itemId, direction);
+        });
+
+        item.addEventListener('mouseenter', (event) => {
+            const encodedDoc = item.getAttribute('data-doc') || '';
+            const doc = decodeURIComponent(encodedDoc);
+            showPinTooltip(doc, event.clientX, event.clientY);
+        });
+
+        item.addEventListener('mousemove', (event) => {
+            const encodedDoc = item.getAttribute('data-doc') || '';
+            const doc = decodeURIComponent(encodedDoc);
+            showPinTooltip(doc, event.clientX, event.clientY);
+        });
+
+        item.addEventListener('mouseleave', () => {
+            hidePinTooltip();
         });
     });
 }

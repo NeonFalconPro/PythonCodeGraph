@@ -12,6 +12,7 @@
 <body data-i18n-title-key="blueprint.title">
     <button id="langToggle" class="lang-toggle"></button>
     <div class="app-container">
+        <button id="sidebarToggleBtn" class="sidebar-toggle-btn" type="button" title="折叠侧边栏">⮜</button>
         <!-- 左侧侧边栏 -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -58,10 +59,10 @@
                         <input type="checkbox" value="function" checked class="node-filter"> <span data-i18n="common.node_function">⚡ 函数</span>
                     </label>
                     <label class="checkbox-item">
-                        <input type="checkbox" value="method" class="node-filter"> <span data-i18n="common.node_method">🔧 方法</span>
+                        <input type="checkbox" value="method" checked class="node-filter"> <span data-i18n="common.node_method">🔧 方法</span>
                     </label>
                     <label class="checkbox-item">
-                        <input type="checkbox" value="constant" class="node-filter"> <span data-i18n="common.node_constant">📌 常量</span>
+                        <input type="checkbox" value="constant" checked class="node-filter"> <span data-i18n="common.node_constant">📌 常量</span>
                     </label>
                     <label class="checkbox-item">
                         <input type="checkbox" value="external" checked class="node-filter"> <span data-i18n="common.node_external">🔗 外部库</span>
@@ -174,6 +175,7 @@
 
             <!-- LiteGraph 画布容器 -->
             <div id="blueprintContainer" class="blueprint-container" style="display:none">
+                <button id="backToFullBtn" class="btn btn-secondary blueprint-back-btn" style="display:none" data-i18n="common.back_to_full">↩ 返回全图</button>
                 <canvas id="blueprintCanvas"></canvas>
             </div>
 

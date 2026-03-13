@@ -296,6 +296,7 @@ class GraphData(BaseModel):
                         "id": child_id,
                         "label": child_node.label,
                         "node_type": "external",
+                        "docstring": child_node.docstring,
                     })
                     output_ids.add(key)
 
@@ -318,6 +319,7 @@ class GraphData(BaseModel):
                             "id": tgt.id,
                             "label": tgt.label,
                             "node_type": tgt.node_type.value,
+                            "docstring": tgt.docstring,
                         })
                         output_ids.add(key)
             # 类的方法归属到模块输出（仅显示方法名）
@@ -330,6 +332,7 @@ class GraphData(BaseModel):
                             "id": tgt.id,
                             "label": tgt.label,
                             "node_type": tgt.node_type.value,
+                            "docstring": tgt.docstring,
                         })
                         output_ids.add(key)
 
@@ -349,6 +352,7 @@ class GraphData(BaseModel):
                             "label": child_node.label,
                             "node_type": "external",
                             "edge_type": "contains",
+                            "docstring": child_node.docstring,
                         })
                         ext_input_ids.add(in_key)
                     out_key = (ext_bp_id, child_id)
@@ -389,6 +393,7 @@ class GraphData(BaseModel):
                                 "id": src_item_id,
                                 "label": src_slot_name,
                                 "node_type": "external",
+                                "docstring": tgt.docstring,
                             })
                             output_ids.add(out_key)
 
@@ -399,6 +404,7 @@ class GraphData(BaseModel):
                                 "label": tgt_slot_name,
                                 "node_type": "external",
                                 "edge_type": edge_type.value,
+                                "docstring": tgt.docstring,
                             })
                             input_ids.add(in_key)
 
@@ -422,6 +428,7 @@ class GraphData(BaseModel):
                     "label": tgt.label,
                     "node_type": tgt.node_type.value,
                     "edge_type": edge_type.value,
+                    "docstring": tgt.docstring,
                 })
                 input_ids.add(in_key)
             # 检查目标有对应的输出引脚 → 创建链接

@@ -54,6 +54,27 @@ body {
 .app-container {
     display: flex;
     height: 100vh;
+    position: relative;
+}
+
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 45%;
+    left: calc(var(--sidebar-width) - 16px);
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    z-index: 120;
+    transition: all 0.2s;
+}
+
+.sidebar-toggle-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 /* ========== 侧边栏 ========== */
@@ -67,6 +88,24 @@ body {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    transition: width 0.2s, min-width 0.2s, padding 0.2s, border-color 0.2s;
+}
+
+.app-container.sidebar-collapsed .sidebar {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border-right-color: transparent;
+    overflow: hidden;
+}
+
+.app-container.sidebar-collapsed .sidebar > * {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.app-container.sidebar-collapsed .sidebar-toggle-btn {
+    left: 10px;
 }
 
 .sidebar-header {

@@ -46,6 +46,8 @@ const dirList = document.getElementById('dirList');
 const selectDirBtn = document.getElementById('selectDirBtn');
 const searchInput = document.getElementById('searchInput');
 const searchCount = document.getElementById('searchCount');
+const appContainer = document.querySelector('.app-container');
+const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
 
 // ============ 事件监听 ============
 analyzeBtn.addEventListener('click', handleAnalyze);
@@ -77,6 +79,31 @@ projectPathInput.addEventListener('keydown', (e) => {
 document.querySelectorAll('input[type="text"], select').forEach(el => {
     el.addEventListener('keydown', (e) => e.stopPropagation());
 });
+
+initSidebarToggle();
+
+function initSidebarToggle() {
+    if (!appContainer || !sidebarToggleBtn) return;
+
+    const syncToggleButton = () => {
+        const collapsed = appContainer.classList.contains('sidebar-collapsed');
+        sidebarToggleBtn.textContent = collapsed ? '⮞' : '⮜';
+        sidebarToggleBtn.title = collapsed ? t('common.expand_sidebar') : t('common.collapse_sidebar');
+    };
+
+    sidebarToggleBtn.addEventListener('click', () => {
+        appContainer.classList.toggle('sidebar-collapsed');
+        syncToggleButton();
+        if (network) {
+            setTimeout(() => {
+                network.redraw();
+                network.fit({ animation: false });
+            }, 180);
+        }
+    });
+
+    syncToggleButton();
+}
 
 // ============ 核心功能 ============
 

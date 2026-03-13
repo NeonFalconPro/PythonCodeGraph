@@ -1,4 +1,4 @@
-# CodeGraph
+# PythonCodeGraph
 
 Python code knowledge graph parser and visualizer.
 
@@ -6,13 +6,16 @@ English | [中文文档](README_CN.md)
 
 ## Overview
 
-CodeGraph analyzes a target Python project with AST and visualizes relationships between modules, classes, functions, methods, constants, and external packages.
+PythonCodeGraph analyzes a target Python project with AST and visualizes relationships between modules, classes, functions, methods, constants, and external packages.
+
+Still struggling to understand the code structure of a large Python project?
 
 It provides two UI modes:
 
 - Standard mode (`/standard`): force-directed and hierarchical graph based on vis-network
 - Blueprint mode (`/blueprint`): module-level input/output blueprint graph based on LiteGraph.js
 
+![example](documents/blueprint.png)
 ## Demo GIFs
 
 ### Standard Mode
@@ -33,6 +36,10 @@ It provides two UI modes:
 - External package hierarchy modeling (e.g. `external:fastapi`, `external:fastapi.staticfiles`)
 - Real-time node/edge filtering in both UI modes
 - Node detail panel with metadata (file, line, docstring, params, decorators, bases)
+- Built-in i18n switch (English/Chinese) with persisted language preference
+- Standard mode interactions: single-click relation highlight, double-click subgraph focus, and return to full graph
+- Blueprint mode interactions: pin-level link rendering, relation highlight, double-click subgraph focus, and return to full graph
+- Collapsible sidebar and cleaner type abbreviations for better readability in dense graphs
 - Directory browser API for selecting analysis target
 
 ## Architecture
@@ -72,6 +79,7 @@ It provides two UI modes:
 - `templates/index.html`: mode selector
 - `templates/standard.html` + `static/js/graph.js`: Standard mode
 - `templates/blueprint.html` + `static/js/blueprint.js`: Blueprint mode
+- `static/js/i18n.js`: language pack and UI text switching
 - `static/css/style.css`: shared style
 - `static/css/blueprint.css`: blueprint-specific style overrides
 
@@ -82,7 +90,7 @@ It provides two UI modes:
 3. Backend validates path and invokes `GraphBuilder.build()`.
 4. `PythonASTParser.parse_project()` generates node/edge sets.
 5. `GraphData` is transformed to UI-specific format.
-6. Frontend renders graph and enables filtering/search/detail interactions.
+6. Frontend renders graph and enables filtering/search/detail/highlight/focus interactions.
 
 ## API Reference
 
@@ -157,9 +165,12 @@ Open: `http://127.0.0.1:8000`
 ## Project Structure
 
 ```text
-CodeGraph/
+PythonCodeGraph/
   app.py
   requirements.txt
+  documents/
+    standard.gif
+    blueprint.gif
   parser/
     __init__.py
     ast_parser.py
@@ -176,6 +187,7 @@ CodeGraph/
     js/
       graph.js
       blueprint.js
+      i18n.js
 ```
 
 ## Developer Guide

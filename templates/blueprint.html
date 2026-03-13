@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeGraph - 蓝图模式</title>
+    <!-- LiteGraph.js CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/css/litegraph.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/blueprint.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 左侧侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <a href="/" class="back-link">← 切换模式</a>
+                <h1>🔧 蓝图模式</h1>
+                <p class="subtitle">基于 LiteGraph.js 的蓝图编辑器</p>
+            </div>
+
+            <!-- 路径输入 -->
+            <div class="control-group">
+                <label>项目路径</label>
+                <div class="path-input-group">
+                    <input type="text" id="projectPath" placeholder="输入 Python 项目路径..."
+                           class="input-field" value="D:\8_python\CodeGraph">
+                    <button id="browseBtn" class="btn btn-secondary" title="浏览目录">📁</button>
+                </div>
+                <button id="analyzeBtn" class="btn btn-primary">🚀 开始解析</button>
+            </div>
+
+            <!-- 搜索 -->
+            <div class="control-group">
+                <label>🔍 搜索节点</label>
+                <div class="search-input-group">
+                    <input type="text" id="searchInput" placeholder="输入节点名称搜索..."
+                           class="input-field">
+                    <span id="searchCount" class="search-count"></span>
+                </div>
+            </div>
+
+            <!-- 节点类型过滤 -->
+            <div class="control-group">
+                <label>节点类型过滤</label>
+                <div class="checkbox-group">
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="package" checked class="node-filter"> 📦 包
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="module" checked class="node-filter"> 📄 模块
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="class" checked class="node-filter"> 🏷️ 类
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="function" checked class="node-filter"> ⚡ 函数
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="method" class="node-filter"> 🔧 方法
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="constant" class="node-filter"> 📌 常量
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="external" checked class="node-filter"> 🔗 外部库
+                    </label>
+                </div>
+            </div>
+
+            <!-- 关系类型过滤 -->
+            <div class="control-group">
+                <label>关系类型过滤</label>
+                <div class="checkbox-group">
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="imports" checked class="edge-filter">
+                        <span class="edge-color" style="background:#E74C3C"></span> 导入
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="inherits" checked class="edge-filter">
+                        <span class="edge-color" style="background:#3498DB"></span> 继承
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="contains" checked class="edge-filter">
+                        <span class="edge-color" style="background:#95A5A6"></span> 包含
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="calls" checked class="edge-filter">
+                        <span class="edge-color" style="background:#2ECC71"></span> 调用
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="decorates" checked class="edge-filter">
+                        <span class="edge-color" style="background:#9B59B6"></span> 装饰
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="instantiates" checked class="edge-filter">
+                        <span class="edge-color" style="background:#F39C12"></span> 实例化
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" value="uses" checked class="edge-filter">
+                        <span class="edge-color" style="background:#00CEC9"></span> 使用
+                    </label>
+                </div>
+            </div>
+
+            <!-- 布局控制 -->
+            <div class="control-group">
+                <button id="arrangeBtn" class="btn btn-secondary">📐 自动排列</button>
+                <button id="fitBtn" class="btn btn-secondary">🔍 适应视图</button>
+            </div>
+
+            <!-- 统计信息 -->
+            <div class="control-group" id="statsPanel" style="display:none">
+                <label>📊 项目统计</label>
+                <div id="statsContent" class="stats-content"></div>
+            </div>
+        </aside>
+
+        <!-- 主内容区域 -->
+        <main class="main-content">
+            <!-- 加载中 -->
+            <div id="loading" class="loading-overlay" style="display:none">
+                <div class="spinner"></div>
+                <p>正在解析项目...</p>
+            </div>
+
+            <!-- 欢迎页面 -->
+            <div id="welcomeScreen" class="welcome-screen">
+                <div class="welcome-content">
+                    <h2>🔧 蓝图模式</h2>
+                    <p>基于 LiteGraph.js 的代码蓝图编辑器</p>
+                    <div class="welcome-steps">
+                        <div class="step">
+                            <span class="step-num">1</span>
+                            <span>在左侧输入 Python 项目路径</span>
+                        </div>
+                        <div class="step">
+                            <span class="step-num">2</span>
+                            <span>点击"开始解析"生成蓝图</span>
+                        </div>
+                        <div class="step">
+                            <span class="step-num">3</span>
+                            <span>拖拽节点、缩放画布自由探索</span>
+                        </div>
+                    </div>
+                    <div class="legend">
+                        <h3>蓝图节点说明</h3>
+                        <div class="legend-grid">
+                            <div class="legend-section">
+                                <h4>节点类型</h4>
+                                <div class="legend-item"><span class="dot" style="background:#FF6B6B"></span> 包 (Package)</div>
+                                <div class="legend-item"><span class="dot" style="background:#4ECDC4"></span> 模块 (Module)</div>
+                                <div class="legend-item"><span class="dot" style="background:#45B7D1"></span> 类 (Class)</div>
+                                <div class="legend-item"><span class="dot" style="background:#96CEB4"></span> 函数 (Function)</div>
+                                <div class="legend-item"><span class="dot" style="background:#FFEAA7"></span> 方法 (Method)</div>
+                                <div class="legend-item"><span class="dot" style="background:#DDA0DD"></span> 常量 (Constant)</div>
+                                <div class="legend-item"><span class="dot" style="background:#FF9F43"></span> 外部库 (External)</div>
+                            </div>
+                            <div class="legend-section">
+                                <h4>连线颜色</h4>
+                                <div class="legend-item"><span class="line" style="background:#E74C3C"></span> 导入</div>
+                                <div class="legend-item"><span class="line" style="background:#3498DB"></span> 继承</div>
+                                <div class="legend-item"><span class="line" style="background:#95A5A6"></span> 包含</div>
+                                <div class="legend-item"><span class="line" style="background:#2ECC71"></span> 调用</div>
+                                <div class="legend-item"><span class="line" style="background:#9B59B6"></span> 装饰</div>
+                                <div class="legend-item"><span class="line" style="background:#F39C12"></span> 实例化</div>
+                                <div class="legend-item"><span class="line" style="background:#00CEC9"></span> 使用</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LiteGraph 画布容器 -->
+            <div id="blueprintContainer" class="blueprint-container" style="display:none">
+                <canvas id="blueprintCanvas"></canvas>
+            </div>
+
+            <!-- 节点详情面板 -->
+            <div id="detailPanel" class="detail-panel" style="display:none">
+                <div class="detail-header">
+                    <h3 id="detailTitle">节点详情</h3>
+                    <button id="closeDetail" class="close-btn">✕</button>
+                </div>
+                <div id="detailContent" class="detail-content"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 目录浏览弹窗 -->
+    <div id="browseModal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📂 选择项目文件夹</h3>
+                <button id="closeBrowse" class="close-btn">✕</button>
+            </div>
+            <div class="modal-path">
+                <button id="parentDirBtn" class="btn btn-small">⬆ 上级</button>
+                <span id="currentPath" class="current-path"></span>
+            </div>
+            <div id="dirList" class="dir-list"></div>
+            <div class="modal-footer">
+                <button id="selectDirBtn" class="btn btn-primary">✅ 选择此文件夹</button>
+                <button id="cancelBrowse" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/build/litegraph.min.js"></script>
+    <script src="/static/js/blueprint.js"></script>
+</body>
+</html>

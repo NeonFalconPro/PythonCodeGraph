@@ -23,6 +23,7 @@ class PythonASTParser:
         self._edge_keys: set = set()  # (source, target, edge_type) 快速去重
         self._class_name_index: Dict[str, str] = {}  # 类名 -> 节点ID 索引
         self._func_name_index: Dict[str, str] = {}   # 函数名 -> 节点ID 索引
+        self._method_index: Dict[str, Dict[str, str]] = {}  # 类ID -> {方法名 -> 方法ID}
         self._current_import_map: Dict[str, str] = {}  # 每个文件的导入别名 -> 外部节点ID
 
     def parse_project(self):
@@ -415,11 +416,11 @@ class PythonASTParser:
                 # 只记录全大写的常量或重要变量
                 name = target.id
                 if name.isupper() or name.startswith('__'):
-                    var_id = f"variable:{module_name}.{name}"
+                    var_id = f"constant:{module_name}.{name}"
                     self._add_node(NodeData(
                         id=var_id,
                         label=name,
-                        node_type=NodeType.VARIABLE,
+                        node_type=NodeType.CONSTANT,
                         file_path=file_path,
                         line_number=node.lineno,
                     ))
@@ -432,7 +433,20 @@ class PythonASTParser:
 
     def _parse_calls(self, tree: ast.AST, module_id: str,
                      module_name: str, file_path: str):
-        """解析函数/类调用关系"""
+        """解析函数/类调用关系，包括实例化后的方法调用"""
+        # 第一遍：收集变量类型映射 var_name → class_id
+        var_type_map: Dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and isinstance(node.value, ast.Call):
+                    call_name = self._get_call_name(node.value)
+                    if call_name:
+                        class_id = self._resolve_class_id(call_name, module_name)
+                        if class_id and class_id in self.nodes:
+                            var_type_map[target.id] = class_id
+
+        # 第二遍：处理调用
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 caller_id = module_id
@@ -440,14 +454,32 @@ class PythonASTParser:
                 if not call_name:
                     continue
 
-                # 尝试解析被调用的目标
+                # 检查是否是 var.method() 形式的实例方法调用
+                if (isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)):
+                    var_name = node.func.value.id
+                    method_name = node.func.attr
+                    class_id = var_type_map.get(var_name)
+                    if class_id:
+                        # 查找类的方法
+                        methods = self._method_index.get(class_id, {})
+                        method_id = methods.get(method_name)
+                        if method_id and method_id in self.nodes:
+                            self._add_edge(EdgeData(
+                                source=caller_id,
+                                target=method_id,
+                                edge_type=EdgeType.CALLS,
+                                label="调用",
+                            ))
+                            continue
+
+                # 常规解析：直接调用类/函数
                 target_id = (
                     self._resolve_class_id(call_name, module_name) or
                     self._resolve_function_id(call_name, module_name)
                 )
 
                 if target_id and target_id in self.nodes:
-                    # 判断是否是实例化（调用类）
                     if target_id.startswith("class:"):
                         edge_type = EdgeType.INSTANTIATES
                         label = "实例化"
@@ -531,6 +563,14 @@ class PythonASTParser:
                 self._class_name_index[short_name] = node.id
             elif node.id.startswith("function:"):
                 self._func_name_index[short_name] = node.id
+            elif node.id.startswith("method:"):
+                # method:module.ClassName.method_name → 类ID = class:module.ClassName
+                parts = node.id.split(":", 1)[1]  # module.ClassName.method_name
+                class_part = parts.rsplit(".", 1)[0]  # module.ClassName
+                class_id = f"class:{class_part}"
+                if class_id not in self._method_index:
+                    self._method_index[class_id] = {}
+                self._method_index[class_id][short_name] = node.id
 
     def _add_edge(self, edge: EdgeData):
         """添加边（去重）"""

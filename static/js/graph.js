@@ -87,7 +87,7 @@ async function handleAnalyze() {
     analyzeBtn.disabled = true;
 
     try {
-        const response = await fetch('/api/analyze', {
+        const response = await fetch('/api/standard/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path }),
@@ -498,7 +498,7 @@ function showNodeDetail(nodeId) {
     // 类型
     const typeNames = {
         package: '📦 包', module: '📄 模块', class: '🏷️ 类',
-        function: '⚡ 函数', method: '🔧 方法', variable: '📌 变量',
+        function: '⚡ 函数', method: '🔧 方法', constant: '📌 常量',
         external: '🔗 外部库',
     };
     html += `<div class="detail-row">
@@ -580,7 +580,7 @@ function showStats(metadata) {
         html += '<hr style="border-color:var(--border);margin:8px 0">';
         const typeLabels = {
             package: '📦 包', module: '📄 模块', class: '🏷️ 类',
-            function: '⚡ 函数', method: '🔧 方法', variable: '📌 变量',
+            function: '⚡ 函数', method: '🔧 方法', constant: '📌 常量',
             external: '🔗 外部库',
         };
         for (const [type, count] of Object.entries(metadata.node_type_counts)) {

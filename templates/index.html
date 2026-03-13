@@ -4,213 +4,139 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CodeGraph - Python 代码知识图谱</title>
-    <!-- vis-network CDN -->
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+        }
+        .mode-selector {
+            text-align: center;
+            max-width: 800px;
+            padding: 40px 20px;
+        }
+        .mode-selector h1 {
+            font-size: 3rem;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe, #74b9ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .mode-selector > p {
+            color: var(--text-secondary);
+            font-size: 1.15rem;
+            margin-bottom: 48px;
+        }
+        .mode-cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 28px;
+        }
+        .mode-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 36px 28px;
+            text-decoration: none;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        .mode-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-6px);
+            box-shadow: 0 12px 40px rgba(108, 92, 231, 0.25);
+        }
+        .mode-icon {
+            font-size: 3.5rem;
+            margin-bottom: 16px;
+        }
+        .mode-card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+        .mode-card > p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-bottom: 20px;
+        }
+        .mode-card ul {
+            list-style: none;
+            text-align: left;
+            width: 100%;
+        }
+        .mode-card li {
+            padding: 6px 0;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        .mode-card li:last-child {
+            border-bottom: none;
+        }
+        .mode-card li::before {
+            content: "✦ ";
+            color: var(--accent);
+        }
+        .mode-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-top: 16px;
+        }
+        .badge-stable {
+            background: rgba(46, 204, 113, 0.15);
+            color: #2ecc71;
+        }
+        .badge-new {
+            background: rgba(108, 92, 231, 0.15);
+            color: #a29bfe;
+        }
+        @media (max-width: 640px) {
+            .mode-cards {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
-    <div class="app-container">
-        <!-- 左侧侧边栏 -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <h1>🔍 CodeGraph</h1>
-                <p class="subtitle">Python 代码知识图谱</p>
-            </div>
-
-            <!-- 路径输入 -->
-            <div class="control-group">
-                <label>项目路径</label>
-                <div class="path-input-group">
-                    <input type="text" id="projectPath" placeholder="输入 Python 项目路径..."
-                           class="input-field">
-                    <button id="browseBtn" class="btn btn-secondary" title="浏览目录">📁</button>
-                </div>
-                <button id="analyzeBtn" class="btn btn-primary">🚀 开始解析</button>
-            </div>
-
-            <!-- 搜索 -->
-            <div class="control-group">
-                <label>🔍 搜索节点</label>
-                <div class="search-input-group">
-                    <input type="text" id="searchInput" placeholder="输入节点名称搜索..."
-                           class="input-field">
-                    <span id="searchCount" class="search-count"></span>
-                </div>
-            </div>
-
-            <!-- 过滤器 -->
-            <div class="control-group">
-                <label>节点类型过滤</label>
-                <div class="checkbox-group">
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="package" checked class="node-filter"> 📦 包
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="module" checked class="node-filter"> 📄 模块
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="class" checked class="node-filter"> 🏷️ 类
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="function" checked class="node-filter"> ⚡ 函数
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="method" class="node-filter"> 🔧 方法
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="variable" class="node-filter"> 📌 变量
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="external" checked class="node-filter"> 🔗 外部库
-                    </label>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>关系类型过滤</label>
-                <div class="checkbox-group">
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="imports" checked class="edge-filter">
-                        <span class="edge-color" style="background:#E74C3C"></span> 导入
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="inherits" checked class="edge-filter">
-                        <span class="edge-color" style="background:#3498DB"></span> 继承
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="contains" checked class="edge-filter">
-                        <span class="edge-color" style="background:#95A5A6"></span> 包含
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="calls" checked class="edge-filter">
-                        <span class="edge-color" style="background:#2ECC71"></span> 调用
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="decorates" checked class="edge-filter">
-                        <span class="edge-color" style="background:#9B59B6"></span> 装饰
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="instantiates" checked class="edge-filter">
-                        <span class="edge-color" style="background:#F39C12"></span> 实例化
-                    </label>
-                    <label class="checkbox-item">
-                        <input type="checkbox" value="uses" checked class="edge-filter">
-                        <span class="edge-color" style="background:#00CEC9"></span> 使用
-                    </label>
-                </div>
-            </div>
-
-            <!-- 布局控制 -->
-            <div class="control-group">
-                <label>图谱布局</label>
-                <select id="layoutSelect" class="input-field">
-                    <option value="physics">力导向布局</option>
-                    <option value="hierarchical-UD">层级布局 (上→下)</option>
-                    <option value="hierarchical-LR">层级布局 (左→右)</option>
-                    <option value="hierarchical-DU">层级布局 (下→上)</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <button id="fitBtn" class="btn btn-secondary">📐 自适应视图</button>
-                <button id="exportBtn" class="btn btn-secondary">💾 导出图片</button>
-            </div>
-
-            <!-- 统计信息 -->
-            <div class="control-group" id="statsPanel" style="display:none">
-                <label>📊 项目统计</label>
-                <div id="statsContent" class="stats-content"></div>
-            </div>
-        </aside>
-
-        <!-- 主内容区域 -->
-        <main class="main-content">
-            <!-- 加载中 -->
-            <div id="loading" class="loading-overlay" style="display:none">
-                <div class="spinner"></div>
-                <p>正在解析项目...</p>
-            </div>
-
-            <!-- 欢迎页面 -->
-            <div id="welcomeScreen" class="welcome-screen">
-                <div class="welcome-content">
-                    <h2>🌐 CodeGraph</h2>
-                    <p>Python 代码知识图谱生成与可视化工具</p>
-                    <div class="welcome-steps">
-                        <div class="step">
-                            <span class="step-num">1</span>
-                            <span>在左侧输入 Python 项目路径</span>
-                        </div>
-                        <div class="step">
-                            <span class="step-num">2</span>
-                            <span>点击"开始解析"按钮</span>
-                        </div>
-                        <div class="step">
-                            <span class="step-num">3</span>
-                            <span>交互式探索代码关系图谱</span>
-                        </div>
-                    </div>
-                    <div class="legend">
-                        <h3>图例说明</h3>
-                        <div class="legend-grid">
-                            <div class="legend-section">
-                                <h4>节点类型</h4>
-                                <div class="legend-item"><span class="dot" style="background:#FF6B6B"></span> 包 (Package)</div>
-                                <div class="legend-item"><span class="dot" style="background:#4ECDC4"></span> 模块 (Module)</div>
-                                <div class="legend-item"><span class="dot" style="background:#45B7D1"></span> 类 (Class)</div>
-                                <div class="legend-item"><span class="dot" style="background:#96CEB4"></span> 函数 (Function)</div>
-                                <div class="legend-item"><span class="dot" style="background:#FFEAA7"></span> 方法 (Method)</div>
-                                <div class="legend-item"><span class="dot" style="background:#DDA0DD"></span> 变量 (Variable)</div>
-                                <div class="legend-item"><span class="dot" style="background:#FF9F43"></span> 外部库 (External)</div>
-                            </div>
-                            <div class="legend-section">
-                                <h4>关系类型</h4>
-                                <div class="legend-item"><span class="line" style="background:#E74C3C"></span> 导入 (Import)</div>
-                                <div class="legend-item"><span class="line" style="background:#3498DB"></span> 继承 (Inherit)</div>
-                                <div class="legend-item"><span class="line dashed" style="background:#95A5A6"></span> 包含 (Contains)</div>
-                                <div class="legend-item"><span class="line" style="background:#2ECC71"></span> 调用 (Call)</div>
-                                <div class="legend-item"><span class="line dashed" style="background:#9B59B6"></span> 装饰 (Decorate)</div>
-                                <div class="legend-item"><span class="line" style="background:#F39C12"></span> 实例化 (Instantiate)</div>
-                                <div class="legend-item"><span class="line" style="background:#00CEC9"></span> 使用 (Uses)</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 图谱容器 -->
-            <div id="graphContainer" class="graph-container" style="display:none"></div>
-
-            <!-- 节点详情面板 -->
-            <div id="detailPanel" class="detail-panel" style="display:none">
-                <div class="detail-header">
-                    <h3 id="detailTitle">节点详情</h3>
-                    <button id="closeDetail" class="close-btn">✕</button>
-                </div>
-                <div id="detailContent" class="detail-content"></div>
-            </div>
-        </main>
-    </div>
-
-    <!-- 目录浏览弹窗 -->
-    <div id="browseModal" class="modal" style="display:none">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>📂 选择项目文件夹</h3>
-                <button id="closeBrowse" class="close-btn">✕</button>
-            </div>
-            <div class="modal-path">
-                <button id="parentDirBtn" class="btn btn-small">⬆ 上级</button>
-                <span id="currentPath" class="current-path"></span>
-            </div>
-            <div id="dirList" class="dir-list"></div>
-            <div class="modal-footer">
-                <button id="selectDirBtn" class="btn btn-primary">✅ 选择此文件夹</button>
-                <button id="cancelBrowse" class="btn btn-secondary">取消</button>
-            </div>
+    <div class="mode-selector">
+        <h1>🌐 CodeGraph</h1>
+        <p>Python 代码知识图谱生成与可视化工具</p>
+        <div class="mode-cards">
+            <a href="/standard" class="mode-card">
+                <div class="mode-icon">📊</div>
+                <h2>标准模式</h2>
+                <p>基于 vis-network 的力导向图谱可视化</p>
+                <ul>
+                    <li>力导向 / 层级多种布局</li>
+                    <li>节点高亮与邻域聚焦</li>
+                    <li>节点搜索与实时过滤</li>
+                    <li>外部库智能分组</li>
+                </ul>
+                <span class="mode-badge badge-stable">稳定版</span>
+            </a>
+            <a href="/blueprint" class="mode-card">
+                <div class="mode-icon">🔧</div>
+                <h2>蓝图模式</h2>
+                <p>基于 LiteGraph.js 的蓝图式节点编辑器</p>
+                <ul>
+                    <li>UE 蓝图风格节点编辑器</li>
+                    <li>输入/输出插槽连线</li>
+                    <li>自由拖拽编排布局</li>
+                    <li>节点类型与关系过滤</li>
+                </ul>
+                <span class="mode-badge badge-new">新功能</span>
+            </a>
         </div>
     </div>
-
-    <script src="/static/js/graph.js"></script>
 </body>
 </html>

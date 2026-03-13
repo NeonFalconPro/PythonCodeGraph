@@ -1,0 +1,122 @@
+/* ========== 蓝图模式专用样式 ========== */
+
+/* LiteGraph 画布容器 */
+.blueprint-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+}
+
+.blueprint-container canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* 覆盖 LiteGraph 默认对话框样式 */
+.litegraph .dialog {
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    border-radius: 8px !important;
+}
+
+.litegraph .dialog input {
+    background: var(--bg-tertiary) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    border-radius: 4px !important;
+}
+
+/* 覆盖 LiteGraph 右键菜单样式 */
+.litecontextmenu,
+.litegraph .litecontextmenu {
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 32px var(--shadow) !important;
+}
+
+.litecontextmenu .litemenu-entry,
+.litegraph .litecontextmenu .litemenu-entry {
+    color: var(--text-primary) !important;
+    padding: 6px 12px !important;
+}
+
+.litecontextmenu .litemenu-entry:hover,
+.litegraph .litecontextmenu .litemenu-entry:hover {
+    background: var(--accent) !important;
+    color: white !important;
+}
+
+.litecontextmenu .litemenu-entry.separator {
+    border-bottom: 1px solid var(--border) !important;
+}
+
+/* ========== 蓝图详情面板扩展样式 ========== */
+
+.bp-item-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.bp-item-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.bp-item-tag.output-tag {
+    border-left: 3px solid var(--accent);
+}
+
+.bp-item-tag.input-tag {
+    border-left: 3px solid #E74C3C;
+}
+
+.edge-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #fff;
+    margin-left: 2px;
+}
+
+.relation-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.relation-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.relation-direction {
+    font-weight: bold;
+    color: var(--accent);
+    font-size: 14px;
+}
+
+.relation-target {
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.relation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}

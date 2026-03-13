@@ -19,13 +19,17 @@ const SLOT_COLORS = {
     "module":   "#4ECDC4",
 };
 
-const SLOT_ICONS = {
-    "class":    "🏷️",
-    "function": "⚡",
-    "method":   "🔧",
-    "constant": "📌",
-    "external": "🔗",
+const TYPE_ABBR = {
+    package:  'PKG',
+    module:   'MOD',
+    class:    'CLS',
+    function: 'FUN',
+    method:   'FUN',
+    constant: 'CST',
+    external: 'EXT',
 };
+
+const SLOT_LABEL_MAX_CHARS = 18;
 
 const EDGE_TYPE_CONFIG = {
     imports:      { color: "#E74C3C", label: "导入" },
@@ -60,6 +64,16 @@ function t(key, vars) {
         return window.CodeGraphI18n.t(key, vars);
     }
     return key;
+}
+
+function getTypeAbbr(type) {
+    return TYPE_ABBR[type] || 'N/A';
+}
+
+function truncateSlotLabel(label) {
+    const text = String(label || '');
+    if (text.length <= SLOT_LABEL_MAX_CHARS) return text;
+    return `${text.slice(0, SLOT_LABEL_MAX_CHARS - 1)}…`;
 }
 
 // ============ DOM 元素 ============
@@ -161,6 +175,10 @@ function initLiteGraph() {
     };
     BlueprintNode.prototype.getExtraMenuOptions = function() { return []; };
     LiteGraph.registerNodeType("codegraph/module", BlueprintNode);
+
+    // 提升节点标题可读性
+    LiteGraph.NODE_TITLE_COLOR = '#f3f6ff';
+    LiteGraph.NODE_TEXT_COLOR = '#e8ecff';
 
     graph = new LGraph();
     const canvasEl = document.getElementById('blueprintCanvas');
@@ -431,9 +449,10 @@ function buildBlueprintGraph(data) {
         if (!node) return;
 
         const isExternal = mod.node_type === "external";
-        node.title = isExternal ? `📦 ${mod.label}` : `📄 ${mod.label}`;
+        node.title = `[${getTypeAbbr(mod.node_type)}] ${mod.label}`;
         node.color = isExternal ? "#FF9F43" : "#4ECDC4";
         node.bgcolor = isExternal ? "#3d2e1a" : "#1a3a38";
+        node.title_text_color = '#f3f6ff';
         node.properties = {
             module_id: mod.id,
             module_type: mod.node_type,
@@ -444,9 +463,9 @@ function buildBlueprintGraph(data) {
 
         // 添加输入引脚（左侧 - 引入项）
         mod.inputs.forEach(inp => {
-            const icon = SLOT_ICONS[inp.node_type] || "📥";
+            const shortLabel = truncateSlotLabel(inp.label);
             const slotIdx = (node.inputs || []).length;
-            node.addInput(`${icon} ${inp.label}`, "*");
+            node.addInput(`[${getTypeAbbr(inp.node_type)}] ${shortLabel}`, "*");
             if (node.inputs && node.inputs[slotIdx]) {
                 node.inputs[slotIdx].color_on = SLOT_COLORS[inp.node_type] || "#aaa";
                 node.inputs[slotIdx]._itemId = inp.id;
@@ -458,9 +477,9 @@ function buildBlueprintGraph(data) {
 
         // 添加输出引脚（右侧 - 定义项）
         mod.outputs.forEach(out => {
-            const icon = SLOT_ICONS[out.node_type] || "📤";
+            const shortLabel = truncateSlotLabel(out.label);
             const slotIdx = (node.outputs || []).length;
-            node.addOutput(`${icon} ${out.label}`, "*");
+            node.addOutput(`[${getTypeAbbr(out.node_type)}] ${shortLabel}`, "*");
             if (node.outputs && node.outputs[slotIdx]) {
                 node.outputs[slotIdx].color_on = SLOT_COLORS[out.node_type] || "#aaa";
                 node.outputs[slotIdx]._itemId = out.id;
@@ -945,8 +964,8 @@ function showNodeDetail(node) {
             <div class="detail-label">${t('common.defs_label')} (${mod.outputs.length})</div>
             <div class="detail-value"><div class="bp-item-list">`;
         mod.outputs.forEach(out => {
-            const icon = SLOT_ICONS[out.node_type] || "";
-            html += `<div class="bp-item-tag output-tag interactive" data-item-id="${encodeURIComponent(out.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="output" data-doc="${encodeURIComponent(normalizeDocstring(out.docstring))}">${icon} ${out.label}</div>`;
+            const abbr = getTypeAbbr(out.node_type);
+            html += `<div class="bp-item-tag output-tag interactive" data-item-id="${encodeURIComponent(out.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="output" data-doc="${encodeURIComponent(normalizeDocstring(out.docstring))}"><span class="bp-type-chip">${abbr}</span>${out.label}</div>`;
         });
         html += `</div></div></div>`;
     }
@@ -957,9 +976,9 @@ function showNodeDetail(node) {
             <div class="detail-label">${t('common.refs_label')} (${mod.inputs.length})</div>
             <div class="detail-value"><div class="bp-item-list">`;
         mod.inputs.forEach(inp => {
-            const icon = SLOT_ICONS[inp.node_type] || "";
+            const abbr = getTypeAbbr(inp.node_type);
             const edgeCfg = EDGE_TYPE_CONFIG[inp.edge_type] || {};
-            html += `<div class="bp-item-tag input-tag interactive" data-item-id="${encodeURIComponent(inp.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="input" data-doc="${encodeURIComponent(normalizeDocstring(inp.docstring))}">${icon} ${inp.label}
+            html += `<div class="bp-item-tag input-tag interactive" data-item-id="${encodeURIComponent(inp.id)}" data-module-id="${encodeURIComponent(mod.id)}" data-direction="input" data-doc="${encodeURIComponent(normalizeDocstring(inp.docstring))}"><span class="bp-type-chip">${abbr}</span>${inp.label}
                 <span class="edge-badge" style="background:${edgeCfg.color || '#666'}">${edgeCfg.label || inp.edge_type}</span>
             </div>`;
         });

@@ -81,6 +81,20 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.bp-type-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    background: rgba(108, 92, 231, 0.85);
+    letter-spacing: 0.3px;
+}
+
 .bp-item-tag.interactive {
     cursor: pointer;
 }

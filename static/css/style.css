@@ -32,7 +32,7 @@ body {
 .lang-toggle {
     position: fixed;
     top: 16px;
-    right: 16px;
+    left: 16px;
     z-index: 500;
     background: var(--bg-secondary);
     color: var(--text-primary);

@@ -79,24 +79,23 @@ class GraphData(BaseModel):
             EdgeType.USES: {"color": "#00CEC9", "dashes": False, "width": 1.5},
         }
 
-        # 节点类型对应的 emoji 图标
-        type_icons = {
-            NodeType.PACKAGE: "\U0001F4E6",   # 📦
-            NodeType.MODULE: "\U0001F4C4",    # 📄
-            NodeType.CLASS: "\U0001F3F7\uFE0F", # 🏷️
-            NodeType.FUNCTION: "\u26A1",      # ⚡
-            NodeType.METHOD: "\U0001F527",    # 🔧
-            NodeType.CONSTANT: "\U0001F4CC",  # 📌
-            NodeType.EXTERNAL: "\U0001F517",  # 🔗
+        type_abbr = {
+            NodeType.PACKAGE: "PKG",
+            NodeType.MODULE: "MOD",
+            NodeType.CLASS: "CLS",
+            NodeType.FUNCTION: "FUN",
+            NodeType.METHOD: "FUN",
+            NodeType.CONSTANT: "CST",
+            NodeType.EXTERNAL: "EXT",
         }
 
         vis_nodes = []
         for node in self.nodes:
             style = type_styles.get(node.node_type, {"color": "#999", "shape": "dot", "size": 15})
-            icon = type_icons.get(node.node_type, "")
+            abbr = type_abbr.get(node.node_type, "N/A")
             vis_node = {
                 "id": node.id,
-                "label": f"{icon} {node.label}",
+                "label": f"[{abbr}] {node.label}",
                 "color": style["color"],
                 "shape": style["shape"],
                 "size": style["size"],

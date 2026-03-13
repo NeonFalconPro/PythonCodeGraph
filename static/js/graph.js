@@ -526,8 +526,8 @@ function showNodeDetail(nodeId) {
     const node = allNodes.find(n => n.id === nodeId);
     if (!node) return;
 
-    // 去掉 emoji 前缀显示纯名称
-    const cleanLabel = node.label.replace(/^[^\w\u4e00-\u9fff]+/u, '').trim() || node.label;
+    // 去掉类型前缀（如 [PKG]）后显示纯名称
+    const cleanLabel = node.label.replace(/^\[[A-Z]+\]\s*/, '').trim() || node.label;
     detailTitle.textContent = cleanLabel;
 
     let html = '';

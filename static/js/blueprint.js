@@ -806,149 +806,233 @@ function createNodeGroups() {
 function performAutoLayout() {
     if (!graph || !graph._nodes || graph._nodes.length === 0) return;
 
-    // 聚焦模式优先使用当前子图数据，避免全图依赖把节点拉得过远
     const layoutData = currentRenderedData || rawBlueprintData || { links: [] };
 
-    const externals = [];
-    const folders = [];
-    const projects = [];
-    graph._nodes.forEach(n => {
-        if (n.properties.module_type === "external") externals.push(n);
-        else if (n.properties.module_type === "package") folders.push(n);
-        else projects.push(n);
+    const nodeById = {};
+    graph._nodes.forEach(node => {
+        const id = node.properties && node.properties.module_id;
+        if (id) nodeById[id] = node;
     });
 
-    // 计算项目模块的依赖深度（基于链接方向）
-    const depMap = {};
-    if (layoutData && layoutData.links) {
-        layoutData.links.forEach(link => {
-            // tgt_module 依赖 src_module
-            if (!link.src_module.startsWith("external:") && !link.tgt_module.startsWith("external:")) {
-                if (!depMap[link.tgt_module]) depMap[link.tgt_module] = new Set();
-                depMap[link.tgt_module].add(link.src_module);
-            }
-        });
+    const nodeIds = Object.keys(nodeById);
+    if (nodeIds.length === 0) {
+        if (graphCanvas) graphCanvas.setDirty(true, true);
+        return;
     }
 
-    // 拓扑层级（模块依赖）
-    const layers = {};
+    const adjacency = {};
+    const directedOut = {};
+    const directedIn = {};
+    const degree = {};
+    const ensureSet = (map, id) => {
+        if (!map[id]) map[id] = new Set();
+        return map[id];
+    };
+
+    nodeIds.forEach(id => {
+        ensureSet(adjacency, id);
+        ensureSet(directedOut, id);
+        ensureSet(directedIn, id);
+        degree[id] = 0;
+    });
+
+    (layoutData.links || []).forEach(link => {
+        const src = link.src_module;
+        const tgt = link.tgt_module;
+        if (!nodeById[src] || !nodeById[tgt]) return;
+        if (src === tgt) return;
+        if (!directedOut[src].has(tgt)) {
+            directedOut[src].add(tgt);
+            directedIn[tgt].add(src);
+        }
+        if (!adjacency[src].has(tgt)) {
+            adjacency[src].add(tgt);
+            degree[src] += 1;
+        }
+        if (!adjacency[tgt].has(src)) {
+            adjacency[tgt].add(src);
+            degree[tgt] += 1;
+        }
+    });
+
+    // 1) 先按连通分量分组，保证相关子图靠在一起
+    const components = [];
     const visited = new Set();
-    function getDepth(modId) {
-        if (visited.has(modId)) return layers[modId] || 0;
-        visited.add(modId);
-        const deps = depMap[modId];
-        if (!deps || deps.size === 0) { layers[modId] = 0; return 0; }
-        let maxDep = 0;
-        deps.forEach(d => { maxDep = Math.max(maxDep, getDepth(d) + 1); });
-        layers[modId] = maxDep;
-        return maxDep;
-    }
-    projects.forEach(n => getDepth(n.properties.module_id));
-
-    // 目录层级（文件夹深度）
-    const folderLayers = {};
-    folders.forEach(n => {
-        const filePath = String(n.properties.file_path || '');
-        const depth = filePath ? filePath.split('/').filter(Boolean).length - 1 : 0;
-        folderLayers[n.properties.module_id] = Math.max(depth, 0);
+    nodeIds.forEach(start => {
+        if (visited.has(start)) return;
+        const queue = [start];
+        const comp = [];
+        visited.add(start);
+        for (let i = 0; i < queue.length; i++) {
+            const cur = queue[i];
+            comp.push(cur);
+            (adjacency[cur] || []).forEach(next => {
+                if (visited.has(next)) return;
+                visited.add(next);
+                queue.push(next);
+            });
+        }
+        components.push(comp);
     });
+
+    components.sort((a, b) => b.length - a.length);
+    if (focusMode.active && focusMode.centerId) {
+        const idx = components.findIndex(comp => comp.includes(focusMode.centerId));
+        if (idx > 0) {
+            const [centerComp] = components.splice(idx, 1);
+            components.unshift(centerComp);
+        }
+    }
+
+    const canvasEl = document.getElementById('blueprintCanvas');
+    const maxRowWidth = Math.max((canvasEl && canvasEl.width ? canvasEl.width : 1600) - 120, 900);
 
     const isFocusView = focusMode.active || graph._nodes.length <= 18;
-    const columnGap = isFocusView ? 90 : 140; // 聚焦时压缩横向间距
-    const yPadding = isFocusView ? 50 : 80; // 聚焦时压缩纵向间距
+    const columnGap = isFocusView ? 72 : 110;
+    const rowGap = isFocusView ? 34 : 52;
+    const compGapX = isFocusView ? 90 : 140;
+    const compGapY = isFocusView ? 90 : 130;
+    const startX = 80;
+    const startY = 90;
 
-    // 外部包列（最左）
-    let y = 100;
-    externals.forEach(n => {
-        n.pos[0] = 80;
-        n.pos[1] = y;
-        y += n.size[1] + yPadding;
-    });
+    let compX = startX;
+    let compY = startY;
+    let rowMaxHeight = 0;
 
-    // 目录节点按层级排列（位于外部节点右侧）
-    const folderGroupByDepth = {};
-    folders.forEach(n => {
-        const depth = folderLayers[n.properties.module_id] || 0;
-        if (!folderGroupByDepth[depth]) folderGroupByDepth[depth] = [];
-        folderGroupByDepth[depth].push(n);
-    });
+    const typeOrder = { package: 0, module: 1, external: 2 };
 
-    // 压缩目录深度索引，避免深层目录造成不必要的横向空白
-    const uniqueDepths = Object.keys(folderGroupByDepth).map(Number).sort((a, b) => a - b);
-    const compactDepthMap = {};
-    uniqueDepths.forEach((depth, idx) => {
-        compactDepthMap[depth] = idx;
-    });
+    components.forEach(comp => {
+        const compSet = new Set(comp);
 
-    const compactFolderGroups = {};
-    folders.forEach(n => {
-        const rawDepth = folderLayers[n.properties.module_id] || 0;
-        const compactDepth = compactDepthMap[rawDepth] ?? 0;
-        if (!compactFolderGroups[compactDepth]) compactFolderGroups[compactDepth] = [];
-        compactFolderGroups[compactDepth].push(n);
-    });
-
-    const maxFolderDepth = Math.max(-1, ...Object.keys(compactFolderGroups).map(Number));
-    const maxExternalWidth = externals.length > 0
-        ? Math.max(...externals.map(n => n.size[0] || NODE_MIN_WIDTH))
-        : 0;
-    const folderBaseX = externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80;
-    const folderDepthX = {};
-    let folderCursor = folderBaseX;
-    for (let depth = 0; depth <= maxFolderDepth; depth++) {
-        const nodes = compactFolderGroups[depth] || [];
-        const maxW = nodes.length > 0 ? Math.max(...nodes.map(n => n.size[0] || NODE_MIN_WIDTH)) : NODE_MIN_WIDTH;
-        folderDepthX[depth] = folderCursor;
-        folderCursor += maxW + columnGap;
-    }
-
-    for (let depth = 0; depth <= maxFolderDepth; depth++) {
-        const nodes = compactFolderGroups[depth] || [];
-        nodes.sort((a, b) => String(a.properties.file_path || a.title).localeCompare(String(b.properties.file_path || b.title)));
-        let fy = 100;
-        nodes.forEach(n => {
-            n.pos[0] = folderDepthX[depth];
-            n.pos[1] = fy;
-            fy += n.size[1] + yPadding;
+        // 2) 分量内有向分层：尽量保证 src 在左、tgt 在右（左进右出）
+        const indeg = {};
+        const outdeg = {};
+        comp.forEach(id => {
+            indeg[id] = 0;
+            outdeg[id] = 0;
         });
-    }
-
-    // 项目模块按层级排列
-    const layerGroups = {};
-    projects.forEach(n => {
-        const layer = layers[n.properties.module_id] || 0;
-        if (!layerGroups[layer]) layerGroups[layer] = [];
-        layerGroups[layer].push(n);
-    });
-
-    const maxLayer = Math.max(0, ...Object.keys(layerGroups).map(Number));
-    const projectBaseX = maxFolderDepth >= 0
-        ? folderCursor
-        : (externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80);
-    const layerMaxWidth = {};
-    for (let layer = 0; layer <= maxLayer; layer++) {
-        const nodes = layerGroups[layer] || [];
-        layerMaxWidth[layer] = nodes.length > 0
-            ? Math.max(...nodes.map(n => n.size[0] || NODE_MIN_WIDTH))
-            : NODE_MIN_WIDTH;
-    }
-
-    let xCursor = projectBaseX;
-    const layerX = {};
-    for (let layer = 0; layer <= maxLayer; layer++) {
-        layerX[layer] = xCursor;
-        xCursor += layerMaxWidth[layer] + columnGap;
-    }
-
-    for (let layer = 0; layer <= maxLayer; layer++) {
-        const nodes = layerGroups[layer] || [];
-        let ly = 100;
-        nodes.forEach(n => {
-            n.pos[0] = layerX[layer];
-            n.pos[1] = ly;
-            ly += n.size[1] + yPadding;
+        comp.forEach(id => {
+            (directedOut[id] || []).forEach(next => {
+                if (!compSet.has(next)) return;
+                outdeg[id] += 1;
+                indeg[next] += 1;
+            });
         });
-    }
+
+        const depth = {};
+        const indegWork = { ...indeg };
+        const processQueue = [];
+        const score = (id) => (outdeg[id] || 0) - (indeg[id] || 0);
+
+        const roots = comp.filter(id => indegWork[id] === 0).sort((a, b) => score(b) - score(a));
+        if (roots.length > 0) {
+            roots.forEach(id => {
+                depth[id] = 0;
+                processQueue.push(id);
+            });
+        } else {
+            // 纯环图没有入度为 0 的根，选一个最偏“输出端”的节点作为起点
+            const seed = comp.reduce((best, cur) => (score(cur) > score(best) ? cur : best), comp[0]);
+            depth[seed] = 0;
+            processQueue.push(seed);
+        }
+
+        const processed = new Set();
+        for (let i = 0; i < processQueue.length; i++) {
+            const cur = processQueue[i];
+            processed.add(cur);
+            (directedOut[cur] || []).forEach(next => {
+                if (!compSet.has(next)) return;
+                const nextDepth = (depth[cur] || 0) + 1;
+                if (depth[next] === undefined || nextDepth > depth[next]) {
+                    depth[next] = nextDepth;
+                }
+                indegWork[next] -= 1;
+                if (indegWork[next] === 0) {
+                    processQueue.push(next);
+                }
+            });
+        }
+
+        // 环中剩余节点：根据已知前驱层级补齐
+        const remain = comp.filter(id => !processed.has(id));
+        remain.sort((a, b) => score(b) - score(a));
+        remain.forEach(id => {
+            const preds = Array.from(directedIn[id] || []).filter(p => compSet.has(p));
+            if (preds.length > 0) {
+                depth[id] = Math.max(...preds.map(p => depth[p] ?? 0)) + 1;
+            } else {
+                depth[id] = 0;
+            }
+        });
+
+        // 压缩层号，避免层级跳跃导致过大横向空白
+        const uniqueDepths = Array.from(new Set(comp.map(id => depth[id] || 0))).sort((a, b) => a - b);
+        const compactDepthMap = {};
+        uniqueDepths.forEach((d, idx) => {
+            compactDepthMap[d] = idx;
+        });
+
+        const levels = {};
+        comp.forEach(id => {
+            const d = compactDepthMap[depth[id] || 0] ?? 0;
+            if (!levels[d]) levels[d] = [];
+            levels[d].push(id);
+        });
+
+        const sortedLevels = Object.keys(levels).map(Number).sort((a, b) => a - b);
+        const levelWidths = [];
+        const levelHeights = [];
+
+        sortedLevels.forEach(d => {
+            const ids = levels[d];
+            ids.sort((a, b) => {
+                const na = nodeById[a];
+                const nb = nodeById[b];
+                const ta = (na.properties && na.properties.module_type) || 'module';
+                const tb = (nb.properties && nb.properties.module_type) || 'module';
+                const oa = typeOrder[ta] ?? 9;
+                const ob = typeOrder[tb] ?? 9;
+                if (oa !== ob) return oa - ob;
+                return String(na.title || '').localeCompare(String(nb.title || ''));
+            });
+
+            const width = Math.max(...ids.map(id => nodeById[id].size[0] || NODE_MIN_WIDTH), NODE_MIN_WIDTH);
+            const height = ids.reduce((sum, id) => sum + (nodeById[id].size[1] || 80), 0) + Math.max(ids.length - 1, 0) * rowGap;
+            levelWidths.push(width);
+            levelHeights.push(height);
+        });
+
+        const compWidth = levelWidths.reduce((s, w) => s + w, 0) + Math.max(sortedLevels.length - 1, 0) * columnGap;
+        const compHeight = levelHeights.length > 0 ? Math.max(...levelHeights) : 0;
+
+        // 4) 行内打包：超宽自动换行，保持子图紧凑
+        if (compX > startX && compX + compWidth > maxRowWidth) {
+            compX = startX;
+            compY += rowMaxHeight + compGapY;
+            rowMaxHeight = 0;
+        }
+
+        let localX = compX;
+        sortedLevels.forEach((d, idx) => {
+            const ids = levels[d];
+            const colW = levelWidths[idx];
+            const colH = levelHeights[idx];
+            let localY = compY + Math.max((compHeight - colH) / 2, 0);
+
+            ids.forEach(id => {
+                const node = nodeById[id];
+                node.pos[0] = localX;
+                node.pos[1] = localY;
+                localY += (node.size[1] || 80) + rowGap;
+            });
+
+            localX += colW + columnGap;
+        });
+
+        compX += compWidth + compGapX;
+        rowMaxHeight = Math.max(rowMaxHeight, compHeight);
+    });
 
     if (graphCanvas) graphCanvas.setDirty(true, true);
 }

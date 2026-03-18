@@ -156,6 +156,13 @@ class GraphData(BaseModel):
         外部库按子模块分层（如 fastapi / fastapi.staticfiles 各为独立节点）"""
         node_map = {n.id: n for n in self.nodes}
 
+        def _normalize_path(path: str) -> str:
+            return str(path or "").replace("\\", "/").strip("/")
+
+        def _folder_node_id(folder_path: str) -> str:
+            normalized = _normalize_path(folder_path)
+            return f"folder:{normalized}" if normalized else "folder:."
+
         # 1. 建立 item → 所属项目模块 映射
         item_to_module: dict[str, str] = {}
         method_owner_class: dict[str, str] = {}
@@ -264,17 +271,91 @@ class GraphData(BaseModel):
         bp_modules: dict = {}
         output_ids: set = set()
 
-        # 项目模块
+        # 5.1 项目目录层级（目录 -> 子目录 / 文件）
+        dir_children: dict[str, list] = {}
+        dir_seen: set[tuple[str, str]] = set()
+
+        def _add_dir_child(parent_dir: str, child_id: str, child_label: str, child_type: str, child_doc: Optional[str] = None):
+            key = (parent_dir, child_id)
+            if key in dir_seen:
+                return
+            dir_seen.add(key)
+            dir_children.setdefault(parent_dir, []).append({
+                "id": child_id,
+                "label": child_label,
+                "node_type": child_type,
+                "docstring": child_doc,
+            })
+
+        # 先创建项目模块节点，同时收集文件路径目录树
         for node in self.nodes:
-            if node.node_type == NodeType.MODULE:
-                bp_modules[node.id] = {
-                    "id": node.id,
-                    "label": node.label,
-                    "file_path": node.file_path or "",
-                    "node_type": "module",
+            if node.node_type != NodeType.MODULE:
+                continue
+
+            normalized_file_path = _normalize_path(node.file_path or "")
+            path_parts = [p for p in normalized_file_path.split("/") if p]
+            dir_parts = path_parts[:-1]
+
+            bp_modules[node.id] = {
+                "id": node.id,
+                "label": node.label,
+                "file_path": normalized_file_path,
+                "node_type": "module",
+                "outputs": [],
+                "inputs": [],
+            }
+
+            if not path_parts:
+                continue
+
+            # 目录链：folder:a -> folder:a/b -> ...
+            for i, dir_name in enumerate(dir_parts):
+                current_dir = "/".join(dir_parts[:i + 1])
+                parent_dir = "/".join(dir_parts[:i])
+                _add_dir_child(
+                    parent_dir,
+                    _folder_node_id(current_dir),
+                    dir_name,
+                    "package",
+                )
+
+            # 最末级目录（或根） -> 文件模块
+            parent_dir = "/".join(dir_parts)
+            filename = path_parts[-1]
+            _add_dir_child(
+                parent_dir,
+                node.id,
+                filename,
+                "module",
+                node.docstring,
+            )
+
+        # 创建目录节点
+        folder_ids: set[str] = set()
+        for parent_dir, children in dir_children.items():
+            if parent_dir:
+                folder_id = _folder_node_id(parent_dir)
+                folder_ids.add(folder_id)
+                bp_modules.setdefault(folder_id, {
+                    "id": folder_id,
+                    "label": parent_dir.split("/")[-1],
+                    "file_path": parent_dir,
+                    "node_type": "package",
                     "outputs": [],
                     "inputs": [],
-                }
+                })
+            for child in children:
+                if child["node_type"] == "package":
+                    folder_ids.add(child["id"])
+                    child_path = child["id"].split(":", 1)[1] if ":" in child["id"] else child["label"]
+                    bp_modules.setdefault(child["id"], {
+                        "id": child["id"],
+                        "label": child["label"],
+                        "file_path": child_path,
+                        "node_type": "package",
+                        "outputs": [],
+                        "inputs": [],
+                    })
 
         # 外部蓝图模块（分层）
         for ext_bp_id in needed_ext_bps:
@@ -342,8 +423,50 @@ class GraphData(BaseModel):
                         })
                         output_ids.add(key)
 
-        # 8. 外部蓝图模块间的层级链接（父模块 → 子模块）
+        # 8. 目录层级链接（目录 -> 子目录 / 文件）
         links: list[dict] = []
+        folder_input_ids: set = set()
+        for parent_dir, children in dir_children.items():
+            if parent_dir:
+                parent_bp_id = _folder_node_id(parent_dir)
+            else:
+                # 根目录不作为单独节点，只作为层级起点
+                parent_bp_id = None
+
+            for child in children:
+                child_id = child["id"]
+
+                # 根目录直连仅用于给文件/目录增加父级输入引脚，不创建无源链接
+                if parent_bp_id and parent_bp_id in bp_modules and child_id in bp_modules:
+                    out_key = (parent_bp_id, child_id)
+                    if out_key not in output_ids:
+                        bp_modules[parent_bp_id]["outputs"].append({
+                            "id": child_id,
+                            "label": child["label"],
+                            "node_type": child["node_type"],
+                            "docstring": child.get("docstring"),
+                        })
+                        output_ids.add(out_key)
+
+                    in_key = (child_id, child_id)
+                    if in_key not in folder_input_ids:
+                        bp_modules[child_id]["inputs"].append({
+                            "id": child_id,
+                            "label": child["label"],
+                            "node_type": "package",
+                            "edge_type": "contains",
+                            "docstring": None,
+                        })
+                        folder_input_ids.add(in_key)
+
+                    links.append({
+                        "src_module": parent_bp_id,
+                        "tgt_module": child_id,
+                        "item_id": child_id,
+                        "edge_type": "contains",
+                    })
+
+        # 9. 外部蓝图模块间的层级链接（父模块 → 子模块）
         ext_input_ids: set = set()
         for ext_bp_id in needed_ext_bps:
             if ext_bp_id not in ext_children:
@@ -370,7 +493,7 @@ class GraphData(BaseModel):
                             "edge_type": "contains",
                         })
 
-        # 9. 处理项目模块的输入引脚和跨模块链接
+        # 10. 处理项目模块的输入引脚和跨模块链接
         input_ids: set = set()
         for src_mod, tgt_bp, item_id, edge_type in cross_refs:
             if src_mod not in bp_modules:

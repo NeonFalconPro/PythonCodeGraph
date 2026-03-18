@@ -88,6 +88,12 @@ function getTypePrefix(type) {
     return TYPE_PREFIX[type] || '⬜N/A';
 }
 
+function getModuleColorByType(type) {
+    if (type === 'external') return { color: '#FF9F43', bgcolor: '#3d2e1a' };
+    if (type === 'package') return { color: '#FF6B6B', bgcolor: '#3a1f24' };
+    return { color: '#4ECDC4', bgcolor: '#1a3a38' };
+}
+
 function truncateSlotLabel(label) {
     const text = String(label || '');
     if (text.length <= SLOT_LABEL_MAX_CHARS) return text;
@@ -143,6 +149,12 @@ cancelBrowse.addEventListener('click', () => browseModal.style.display = 'none')
 parentDirBtn.addEventListener('click', handleParentDir);
 selectDirBtn.addEventListener('click', handleSelectDir);
 searchInput.addEventListener('input', handleSearch);
+searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSearch();
+    }
+});
 backToFullBtn.addEventListener('click', exitFocusMode);
 
 document.querySelectorAll('.node-filter, .edge-filter').forEach(cb => {
@@ -476,10 +488,10 @@ function buildBlueprintGraph(data) {
         const node = LiteGraph.createNode("codegraph/module");
         if (!node) return;
 
-        const isExternal = mod.node_type === "external";
+        const nodeColors = getModuleColorByType(mod.node_type);
         node.title = `[${getTypeAbbr(mod.node_type)}] ${mod.label}`;
-        node.color = isExternal ? "#FF9F43" : "#4ECDC4";
-        node.bgcolor = isExternal ? "#3d2e1a" : "#1a3a38";
+        node.color = nodeColors.color;
+        node.bgcolor = nodeColors.bgcolor;
         node.title_text_color = '#f3f6ff';
         node.properties = {
             module_id: mod.id,
@@ -591,11 +603,8 @@ function buildBlueprintGraph(data) {
 }
 
 function getNodeBaseStyle(node) {
-    const isExt = node.properties && node.properties.module_type === 'external';
-    return {
-        color: isExt ? '#FF9F43' : '#4ECDC4',
-        bgcolor: isExt ? '#3d2e1a' : '#1a3a38',
-    };
+    const moduleType = node.properties ? node.properties.module_type : 'module';
+    return getModuleColorByType(moduleType);
 }
 
 function clearHighlight() {
@@ -717,13 +726,41 @@ function buildFocusedData(centerId, baseData) {
     const nodeSet = new Set([centerId]);
     const links = [];
 
-    (baseData.links || []).forEach(link => {
+    const allLinks = baseData.links || [];
+
+    // 先保留中心节点的一跳邻域
+    allLinks.forEach(link => {
         if (link.src_module === centerId || link.tgt_module === centerId) {
             links.push(link);
             nodeSet.add(link.src_module);
             nodeSet.add(link.tgt_module);
         }
     });
+
+    // 目录层级补齐：从中心节点沿 contains 关系向上追溯父目录链
+    const containsLinks = allLinks.filter(link => link.edge_type === 'contains');
+    let current = centerId;
+    const visited = new Set([current]);
+
+    while (current) {
+        const parentLink = containsLinks.find(link => link.tgt_module === current);
+        if (!parentLink) break;
+
+        nodeSet.add(parentLink.src_module);
+        nodeSet.add(parentLink.tgt_module);
+
+        const exists = links.some(l =>
+            l.src_module === parentLink.src_module
+            && l.tgt_module === parentLink.tgt_module
+            && (l.item_id || '') === (parentLink.item_id || '')
+            && (l.edge_type || '') === (parentLink.edge_type || '')
+        );
+        if (!exists) links.push(parentLink);
+
+        current = parentLink.src_module;
+        if (visited.has(current)) break;
+        visited.add(current);
+    }
 
     const modules = (baseData.modules || []).filter(m => nodeSet.has(m.id));
     return { modules, links };
@@ -769,17 +806,22 @@ function createNodeGroups() {
 function performAutoLayout() {
     if (!graph || !graph._nodes || graph._nodes.length === 0) return;
 
+    // 聚焦模式优先使用当前子图数据，避免全图依赖把节点拉得过远
+    const layoutData = currentRenderedData || rawBlueprintData || { links: [] };
+
     const externals = [];
+    const folders = [];
     const projects = [];
     graph._nodes.forEach(n => {
         if (n.properties.module_type === "external") externals.push(n);
+        else if (n.properties.module_type === "package") folders.push(n);
         else projects.push(n);
     });
 
     // 计算项目模块的依赖深度（基于链接方向）
     const depMap = {};
-    if (rawBlueprintData && rawBlueprintData.links) {
-        rawBlueprintData.links.forEach(link => {
+    if (layoutData && layoutData.links) {
+        layoutData.links.forEach(link => {
             // tgt_module 依赖 src_module
             if (!link.src_module.startsWith("external:") && !link.tgt_module.startsWith("external:")) {
                 if (!depMap[link.tgt_module]) depMap[link.tgt_module] = new Set();
@@ -788,7 +830,7 @@ function performAutoLayout() {
         });
     }
 
-    // 拓扑层级
+    // 拓扑层级（模块依赖）
     const layers = {};
     const visited = new Set();
     function getDepth(modId) {
@@ -803,8 +845,17 @@ function performAutoLayout() {
     }
     projects.forEach(n => getDepth(n.properties.module_id));
 
-    const columnGap = 140; // 层间距（按每层最大节点宽度自适应）
-    const yPadding = 80; // 层间距
+    // 目录层级（文件夹深度）
+    const folderLayers = {};
+    folders.forEach(n => {
+        const filePath = String(n.properties.file_path || '');
+        const depth = filePath ? filePath.split('/').filter(Boolean).length - 1 : 0;
+        folderLayers[n.properties.module_id] = Math.max(depth, 0);
+    });
+
+    const isFocusView = focusMode.active || graph._nodes.length <= 18;
+    const columnGap = isFocusView ? 90 : 140; // 聚焦时压缩横向间距
+    const yPadding = isFocusView ? 50 : 80; // 聚焦时压缩纵向间距
 
     // 外部包列（最左）
     let y = 100;
@@ -813,6 +864,54 @@ function performAutoLayout() {
         n.pos[1] = y;
         y += n.size[1] + yPadding;
     });
+
+    // 目录节点按层级排列（位于外部节点右侧）
+    const folderGroupByDepth = {};
+    folders.forEach(n => {
+        const depth = folderLayers[n.properties.module_id] || 0;
+        if (!folderGroupByDepth[depth]) folderGroupByDepth[depth] = [];
+        folderGroupByDepth[depth].push(n);
+    });
+
+    // 压缩目录深度索引，避免深层目录造成不必要的横向空白
+    const uniqueDepths = Object.keys(folderGroupByDepth).map(Number).sort((a, b) => a - b);
+    const compactDepthMap = {};
+    uniqueDepths.forEach((depth, idx) => {
+        compactDepthMap[depth] = idx;
+    });
+
+    const compactFolderGroups = {};
+    folders.forEach(n => {
+        const rawDepth = folderLayers[n.properties.module_id] || 0;
+        const compactDepth = compactDepthMap[rawDepth] ?? 0;
+        if (!compactFolderGroups[compactDepth]) compactFolderGroups[compactDepth] = [];
+        compactFolderGroups[compactDepth].push(n);
+    });
+
+    const maxFolderDepth = Math.max(-1, ...Object.keys(compactFolderGroups).map(Number));
+    const maxExternalWidth = externals.length > 0
+        ? Math.max(...externals.map(n => n.size[0] || NODE_MIN_WIDTH))
+        : 0;
+    const folderBaseX = externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80;
+    const folderDepthX = {};
+    let folderCursor = folderBaseX;
+    for (let depth = 0; depth <= maxFolderDepth; depth++) {
+        const nodes = compactFolderGroups[depth] || [];
+        const maxW = nodes.length > 0 ? Math.max(...nodes.map(n => n.size[0] || NODE_MIN_WIDTH)) : NODE_MIN_WIDTH;
+        folderDepthX[depth] = folderCursor;
+        folderCursor += maxW + columnGap;
+    }
+
+    for (let depth = 0; depth <= maxFolderDepth; depth++) {
+        const nodes = compactFolderGroups[depth] || [];
+        nodes.sort((a, b) => String(a.properties.file_path || a.title).localeCompare(String(b.properties.file_path || b.title)));
+        let fy = 100;
+        nodes.forEach(n => {
+            n.pos[0] = folderDepthX[depth];
+            n.pos[1] = fy;
+            fy += n.size[1] + yPadding;
+        });
+    }
 
     // 项目模块按层级排列
     const layerGroups = {};
@@ -823,9 +922,9 @@ function performAutoLayout() {
     });
 
     const maxLayer = Math.max(0, ...Object.keys(layerGroups).map(Number));
-    const maxExternalWidth = externals.length > 0
-        ? Math.max(...externals.map(n => n.size[0] || NODE_MIN_WIDTH))
-        : 0;
+    const projectBaseX = maxFolderDepth >= 0
+        ? folderCursor
+        : (externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80);
     const layerMaxWidth = {};
     for (let layer = 0; layer <= maxLayer; layer++) {
         const nodes = layerGroups[layer] || [];
@@ -834,7 +933,7 @@ function performAutoLayout() {
             : NODE_MIN_WIDTH;
     }
 
-    let xCursor = externals.length > 0 ? 80 + maxExternalWidth + columnGap : 80;
+    let xCursor = projectBaseX;
     const layerX = {};
     for (let layer = 0; layer <= maxLayer; layer++) {
         layerX[layer] = xCursor;
@@ -895,9 +994,12 @@ function getFilteredData() {
 
     // 过滤模块的输入/输出引脚
     const modules = rawBlueprintData.modules
-        .filter(mod =>
-            mod.node_type === "module" || (mod.node_type === "external" && nodeTypes.has("external"))
-        )
+        .filter(mod => {
+            if (mod.node_type === 'external') return nodeTypes.has('external');
+            if (mod.node_type === 'package') return nodeTypes.has('package');
+            if (mod.node_type === 'module') return nodeTypes.has('module');
+            return true;
+        })
         .map(mod => ({
             ...mod,
             outputs: mod.outputs.filter(out => nodeTypes.has(out.node_type)),
@@ -984,9 +1086,9 @@ function handleSearch() {
 function resetNodeColors() {
     if (!graph || !graph._nodes) return;
     graph._nodes.forEach(node => {
-        const isExt = node.properties.module_type === "external";
-        node.color = isExt ? "#FF9F43" : "#4ECDC4";
-        node.bgcolor = isExt ? "#3d2e1a" : "#1a3a38";
+        const style = getNodeBaseStyle(node);
+        node.color = style.color;
+        node.bgcolor = style.bgcolor;
     });
     if (graphCanvas) graphCanvas.setDirty(true, true);
 }
@@ -999,6 +1101,7 @@ function showNodeDetail(node) {
     if (!mod) return;
 
     const isExternal = mod.node_type === "external";
+    const isPackage = mod.node_type === "package";
     detailTitle.textContent = mod.label;
 
     let html = '';
@@ -1006,7 +1109,9 @@ function showNodeDetail(node) {
     // 类型
     html += `<div class="detail-row">
         <div class="detail-label">${t('common.type_label')}</div>
-        <div class="detail-value">${isExternal ? t('common.node_external') : t('common.node_module')}</div>
+        <div class="detail-value">${
+            isExternal ? t('common.node_external') : (isPackage ? t('common.node_package') : t('common.node_module'))
+        }</div>
     </div>`;
 
     // 标识

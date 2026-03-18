@@ -1,30 +1,16 @@
 # PythonCodeGraph
 
-Python code knowledge graph parser and visualizer.
+Python code knowledge graph parser and visualizer (blueprint-focused edition).
 
 English | [中文文档](README_CN.md)
 
 ## Overview
 
-PythonCodeGraph analyzes a target Python project with AST and visualizes relationships between modules, classes, functions, methods, constants, and external packages.
+PythonCodeGraph statically analyzes a target Python project via AST and visualizes entities and relationships through a blueprint canvas.
 
-Still struggling to understand the code structure of a large Python project?
-
-It provides two UI modes:
-
-- Standard mode (`/standard`): force-directed and hierarchical graph based on vis-network
-- Blueprint mode (`/blueprint`): module-level input/output blueprint graph based on LiteGraph.js
+Default entry is blueprint mode: `/` (and `/blueprint`).
 
 ![example](documents/blueprint.png)
-## Demo GIFs
-
-### Standard Mode
-
-![Standard mode demo](documents/standard.gif)
-
-### Blueprint Mode
-
-![Blueprint mode demo](documents/blueprint.gif)
 
 ## Current Capabilities
 
@@ -33,14 +19,16 @@ It provides two UI modes:
   - package, module, class, function, method, constant, external
 - Multi-relationship extraction:
   - imports, inherits, contains, calls, decorates, instantiates, uses
-- External package hierarchy modeling (e.g. `external:fastapi`, `external:fastapi.staticfiles`)
-- Real-time node/edge filtering in both UI modes
+- External package hierarchy modeling (e.g. `external:fastapi.staticfiles`)
+- Real-time node/edge filtering in blueprint mode
 - Node detail panel with metadata (file, line, docstring, params, decorators, bases)
-- Built-in i18n switch (English/Chinese) with persisted language preference
-- Standard mode interactions: single-click relation highlight, double-click subgraph focus, and return to full graph
-- Blueprint mode interactions: pin-level link rendering, relation highlight, double-click subgraph focus, and return to full graph
-- Collapsible sidebar and cleaner type abbreviations for better readability in dense graphs
+- Pin-level link rendering, relation highlight, subgraph focus, back-to-full
 - Directory browser API for selecting analysis target
+- Built-in i18n switch (English/Chinese) with persisted language preference
+
+## Demo GIF
+
+![Blueprint mode demo](documents/blueprint.gif)
 
 ## Architecture
 
@@ -48,10 +36,8 @@ It provides two UI modes:
 
 - `app.py`
   - FastAPI app entry
-  - Page routes: `/`, `/standard`, `/blueprint`
+  - Page routes: `/`, `/blueprint`
   - API routes:
-    - `/api/standard/analyze`
-    - `/api/standard/analyze/filtered`
     - `/api/blueprint/analyze`
     - `/api/blueprint/analyze/filtered`
     - `/api/browse`
@@ -70,63 +56,44 @@ It provides two UI modes:
 
 - `parser/models.py`
   - Data models (`NodeData`, `EdgeData`, `GraphData`)
-  - Output adapters:
-    - `to_vis_format()` for Standard mode
-    - `to_blueprint_format()` for Blueprint mode
+  - Output adapter: `to_blueprint_format()`
 
 ### Frontend
 
-- `templates/index.html`: mode selector
-- `templates/standard.html` + `static/js/graph.js`: Standard mode
-- `templates/blueprint.html` + `static/js/blueprint.js`: Blueprint mode
+- `templates/blueprint.html` + `static/js/blueprint.js`: blueprint UI
 - `static/js/i18n.js`: language pack and UI text switching
 - `static/css/style.css`: shared style
 - `static/css/blueprint.css`: blueprint-specific style overrides
 
-## Data Flow
-
-1. User selects a folder path.
-2. Frontend calls one of analyze APIs.
-3. Backend validates path and invokes `GraphBuilder.build()`.
-4. `PythonASTParser.parse_project()` generates node/edge sets.
-5. `GraphData` is transformed to UI-specific format.
-6. Frontend renders graph and enables filtering/search/detail/highlight/focus interactions.
-
 ## API Reference
 
-### Page routes
+### Page Routes
 
-- `GET /` mode selector
-- `GET /standard` standard visualization page
-- `GET /blueprint` blueprint visualization page
+- `GET /`: blueprint page
+- `GET /blueprint`: blueprint page
 
 ### Analyze APIs
 
-- `POST /api/standard/analyze`
+- `POST /api/blueprint/analyze`
   - Request:
     ```json
     { "path": "D:/your/python/project" }
     ```
-  - Response: vis-network formatted graph + metadata
+  - Response: blueprint module/link structure + metadata
 
-- `POST /api/standard/analyze/filtered`
 - `POST /api/blueprint/analyze/filtered`
   - Request:
     ```json
     {
       "path": "D:/your/python/project",
-      "node_types": ["module", "class", "function", "external"],
-      "edge_types": ["imports", "calls", "uses"],
+      "node_types": ["package", "module", "class", "function", "external"],
+      "edge_types": ["contains", "imports", "calls", "uses"],
       "show_methods": true,
       "show_variables": false
     }
     ```
 
-- `POST /api/blueprint/analyze`
-  - Request same as standard analyze
-  - Response: blueprint module/link structure + metadata
-
-### Directory browser API
+### Directory Browser API
 
 - `GET /api/browse?path=...`
   - Returns subdirectories only (hidden folders ignored)
@@ -136,7 +103,7 @@ It provides two UI modes:
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate  # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -169,32 +136,26 @@ PythonCodeGraph/
   app.py
   requirements.txt
   documents/
-    standard.gif
     blueprint.gif
   parser/
-    __init__.py
     ast_parser.py
     graph_builder.py
     models.py
   templates/
-    index.html
-    standard.html
     blueprint.html
   static/
     css/
       style.css
       blueprint.css
     js/
-      graph.js
       blueprint.js
       i18n.js
+      litegraph.min.js
 ```
 
 ## Developer Guide
 
-For detailed framework and extension guide, see:
-
-- [FRAMEWORK_DEVELOPMENT_GUIDE_CN.md](FRAMEWORK_DEVELOPMENT_GUIDE_CN.md)
+See [documents/FRAMEWORK_DEVELOPMENT_GUIDE_CN.md](documents/FRAMEWORK_DEVELOPMENT_GUIDE_CN.md).
 
 ## License
 

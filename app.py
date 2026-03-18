@@ -2,7 +2,7 @@
 CodeGraph - Python 代码知识图谱生成与可视化工具
 
 主应用入口，提供 Web 界面和 API 接口
-支持标准模式（vis-network）和蓝图模式（LiteGraph.js）
+专注蓝图模式（LiteGraph.js）
 """
 
 import os
@@ -81,47 +81,14 @@ def _apply_filters(graph_data: GraphData, req: FilterRequest) -> GraphData:
 
 @app.get("/")
 async def index(request: Request):
-    """模式选择主页"""
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-@app.get("/standard")
-async def standard_page(request: Request):
-    """标准模式页面"""
-    return templates.TemplateResponse("standard.html", {"request": request})
+    """蓝图模式主页"""
+    return templates.TemplateResponse("blueprint.html", {"request": request})
 
 
 @app.get("/blueprint")
 async def blueprint_page(request: Request):
     """蓝图模式页面"""
     return templates.TemplateResponse("blueprint.html", {"request": request})
-
-
-# ============ 标准模式 API ============
-
-@app.post("/api/standard/analyze")
-async def standard_analyze(req: AnalyzeRequest):
-    """标准模式解析，返回 vis-network 格式"""
-    graph_data = _build_graph(req.path)
-    vis_data = graph_data.to_vis_format()
-    return JSONResponse(content={
-        "success": True,
-        "data": vis_data,
-        "metadata": graph_data.metadata,
-    })
-
-
-@app.post("/api/standard/analyze/filtered")
-async def standard_analyze_filtered(req: FilterRequest):
-    """标准模式带过滤的解析"""
-    graph_data = _build_graph(req.path)
-    graph_data = _apply_filters(graph_data, req)
-    vis_data = graph_data.to_vis_format()
-    return JSONResponse(content={
-        "success": True,
-        "data": vis_data,
-        "metadata": graph_data.metadata,
-    })
 
 
 # ============ 蓝图模式 API ============

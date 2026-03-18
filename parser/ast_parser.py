@@ -552,6 +552,28 @@ class PythonASTParser:
         """补齐 from x import y 的内部符号边，避免因文件解析顺序导致漏连线"""
         for source_module_id, import_module, imported_name in self._pending_internal_import_items:
             item_id = self._resolve_imported_item_id(import_module, imported_name)
+            if not item_id:
+                # 兜底：若导入项不是 class/function/大写常量（如 config.config.config），
+                # 仍创建一个模块级符号节点，保证蓝图可见引脚与连线。
+                module_id = self._resolve_module_id(import_module)
+                if module_id and module_id in self.nodes:
+                    module_node = self.nodes[module_id]
+                    item_id = f"constant:{import_module}.{imported_name}"
+                    self._add_node(NodeData(
+                        id=item_id,
+                        label=imported_name,
+                        node_type=NodeType.CONSTANT,
+                        file_path=module_node.file_path,
+                        line_number=module_node.line_number,
+                        details={"synthetic_import_item": True},
+                    ))
+                    self._add_edge(EdgeData(
+                        source=module_id,
+                        target=item_id,
+                        edge_type=EdgeType.CONTAINS,
+                        label="定义",
+                    ))
+
             if item_id and item_id in self.nodes:
                 self._add_edge(EdgeData(
                     source=source_module_id,

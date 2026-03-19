@@ -451,6 +451,12 @@ async function handleAnalyze() {
             rawBlueprintData = result.data;
             currentMetadata = result.metadata;
 
+            // 重新解析后强制回到全图模式，避免保留旧聚焦状态导致无法再次双击聚焦。
+            focusMode.active = false;
+            focusMode.centerId = null;
+            lastBaseData = null;
+            backToFullBtn.style.display = 'none';
+
             welcomeScreen.style.display = 'none';
             blueprintContainer.style.display = 'block';
             if (!graph) initLiteGraph();

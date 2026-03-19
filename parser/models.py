@@ -121,7 +121,7 @@ class GraphData(BaseModel):
             if edge.edge_type not in cross_edge_types:
                 continue
             tgt = node_map.get(edge.target)
-            if not tgt or tgt.node_type in (NodeType.MODULE, NodeType.PACKAGE):
+            if not tgt or tgt.node_type == NodeType.PACKAGE:
                 continue
             # 确定源所属模块
             src_node = node_map.get(edge.source)
@@ -134,6 +134,9 @@ class GraphData(BaseModel):
                 tgt_bp = ext_item_to_bp.get(edge.target)
                 if tgt_bp:
                     cross_refs.append((src_mod, tgt_bp, edge.target, edge.edge_type))
+            elif tgt.node_type == NodeType.MODULE:
+                if edge.target != src_mod:
+                    cross_refs.append((src_mod, edge.target, edge.target, edge.edge_type))
             else:
                 tgt_mod = item_to_module.get(edge.target)
                 if tgt_mod and tgt_mod != src_mod:
@@ -208,6 +211,18 @@ class GraphData(BaseModel):
                 "outputs": [],
                 "inputs": [],
             }
+
+            # 给模块自身增加一个输出引脚，用于表达模块级 imports 依赖关系
+            self_key = (node.id, node.id)
+            if self_key not in output_ids:
+                display_name = path_parts[-1] if path_parts else node.label.split('.')[-1]
+                bp_modules[node.id]["outputs"].append({
+                    "id": node.id,
+                    "label": display_name,
+                    "node_type": "module",
+                    "docstring": node.docstring,
+                })
+                output_ids.add(self_key)
 
             if not path_parts:
                 continue

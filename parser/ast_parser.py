@@ -585,6 +585,7 @@ class PythonASTParser:
     def _resolve_imported_item_id(self, import_module: str, imported_name: str) -> Optional[str]:
         """优先按模块内精确匹配导入项，再回退到全局名称索引"""
         exact_candidates = (
+            f"module:{import_module}.{imported_name}",
             f"class:{import_module}.{imported_name}",
             f"function:{import_module}.{imported_name}",
             f"constant:{import_module}.{imported_name}",
@@ -592,6 +593,12 @@ class PythonASTParser:
         for candidate in exact_candidates:
             if candidate in self.nodes:
                 return candidate
+
+        # 若导入项本身是内部子模块（from pkg import submod），优先返回模块节点
+        full_module_name = f"{import_module}.{imported_name}"
+        module_id = self._resolve_module_id(full_module_name)
+        if module_id:
+            return module_id
 
         return (
             self._class_name_index.get(imported_name)
@@ -631,7 +638,15 @@ class PythonASTParser:
         """解析模块名到节点ID"""
         if module_name in self._module_map:
             return self._module_map[module_name]
-        # 尝试匹配子模块
+
+        # 优先匹配其直接/间接子模块（如 framework.core -> framework.core.response）
+        prefix = f"{module_name}."
+        prefix_candidates = [name for name in self._module_map if name.startswith(prefix)]
+        if prefix_candidates:
+            best = min(prefix_candidates, key=len)
+            return self._module_map[best]
+
+        # 再尝试短名/相对名兜底匹配
         for name, node_id in self._module_map.items():
             if name.endswith(f".{module_name}") or module_name.endswith(f".{name}"):
                 return node_id

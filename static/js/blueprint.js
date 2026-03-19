@@ -110,6 +110,15 @@ function estimateTextWidth(text) {
     return w;
 }
 
+function parseExcludePaths(rawText) {
+    return String(rawText || '')
+        .split(/[\n,;]+/)
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(s => s.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/$/, ''))
+        .filter(Boolean);
+}
+
 // ============ DOM 元素 ============
 const projectPathInput = document.getElementById('projectPath');
 const analyzeBtn = document.getElementById('analyzeBtn');
@@ -132,6 +141,7 @@ const parentDirBtn = document.getElementById('parentDirBtn');
 const currentPathSpan = document.getElementById('currentPath');
 const dirList = document.getElementById('dirList');
 const selectDirBtn = document.getElementById('selectDirBtn');
+const excludePathsInput = document.getElementById('excludePaths');
 const searchInput = document.getElementById('searchInput');
 const searchCount = document.getElementById('searchCount');
 const backToFullBtn = document.getElementById('backToFullBtn');
@@ -165,7 +175,7 @@ projectPathInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') handleAnalyze();
 });
 
-document.querySelectorAll('input[type="text"], select').forEach(el => {
+document.querySelectorAll('input[type="text"], textarea, select').forEach(el => {
     el.addEventListener('keydown', (e) => e.stopPropagation());
 });
 
@@ -434,6 +444,7 @@ function resizeCanvas() {
 async function handleAnalyze() {
     const path = projectPathInput.value.trim();
     if (!path) { showToast(t('common.toast_input_path'), 'error'); return; }
+    const excludePaths = parseExcludePaths(excludePathsInput ? excludePathsInput.value : '');
 
     loading.style.display = 'flex';
     analyzeBtn.disabled = true;
@@ -442,7 +453,7 @@ async function handleAnalyze() {
         const response = await fetch('/api/blueprint/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path }),
+            body: JSON.stringify({ path, exclude_paths: excludePaths }),
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || '解析失败');
